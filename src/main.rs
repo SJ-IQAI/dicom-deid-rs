@@ -6,12 +6,15 @@ use std::process;
 
 fn print_usage(program: &str) {
     eprintln!(
-        "Usage: {} <input_dir> <output_dir> <recipe_file> [--var NAME VALUE]...",
+        "Usage: {} <input_dir> <output_dir> <recipe_file> [--var NAME VALUE]... [--salt VALUE]",
         program
     );
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --var NAME VALUE   Define a recipe variable (can be repeated)");
+    eprintln!("  --salt VALUE       Salt mixed into the built-in hashuid function.");
+    eprintln!("                     Use the same salt across runs to keep hashed");
+    eprintln!("                     values consistent for a dataset.");
 }
 
 fn main() {
@@ -22,6 +25,7 @@ fn main() {
     }
 
     let mut variables: HashMap<String, String> = HashMap::new();
+    let mut salt: Option<String> = None;
     let mut i = 4;
     while i < args.len() {
         if args[i] == "--var" {
@@ -32,6 +36,14 @@ fn main() {
             }
             variables.insert(args[i + 1].clone(), args[i + 2].clone());
             i += 3;
+        } else if args[i] == "--salt" {
+            if i + 1 >= args.len() {
+                eprintln!("Error: --salt requires a VALUE argument");
+                print_usage(&args[0]);
+                process::exit(1);
+            }
+            salt = Some(args[i + 1].clone());
+            i += 2;
         } else {
             eprintln!("Error: unknown argument '{}'", args[i]);
             print_usage(&args[0]);
@@ -45,6 +57,7 @@ fn main() {
         recipe_path: PathBuf::from(&args[3]),
         variables,
         functions: HashMap::new(),
+        salt,
     };
 
     let pipeline = match DeidPipeline::new(config) {

@@ -40,7 +40,7 @@ project.
 ## Usage
 
 ```
-dicom-deid-rs <input_dir> <output_dir> <recipe_file> [--var NAME VALUE]...
+dicom-deid-rs <input_dir> <output_dir> <recipe_file> [--var NAME VALUE]... [--salt VALUE]
 ```
 
 The tool recursively finds all `.dcm` files in `input_dir`, applies the recipe, and writes de-identified files to `output_dir`, preserving the directory structure.
@@ -49,8 +49,17 @@ The tool recursively finds all `.dcm` files in `input_dir`, applies the recipe, 
 dicom-deid-rs ./input ./output recipe.txt \
   --var PATIENT_ID "ANON-001" \
   --var PATIENT_NAME "Anonymous" \
-  --var DATEINC "30"
+  --var DATEINC "30" \
+  --salt "my-secret-salt"
 ```
+
+`--salt` mixes a secret into the built-in `hashuid` function by prepending it
+to the value before hashing (`SHA-256(salt + value)`), so hashed values such
+as `REPLACE PatientID func:hashuid` cannot be reversed by hashing candidate
+inputs without the salt. Use the same salt across runs of a dataset to keep
+hashed UIDs and IDs consistent; without `--salt`, output is plain (unsalted)
+SHA-256, equivalent to an empty salt.
+
 
 ## Recipe Format
 
@@ -140,6 +149,7 @@ let config = DeidConfig {
         ("PATIENT_ID".into(), "ANON-001".into()),
     ]),
     functions: HashMap::new(), // hashuid is built-in
+    salt: Some("my-secret-salt".into()), // or None for unsalted hashuid
 };
 
 let pipeline = DeidPipeline::new(config).unwrap();

@@ -221,6 +221,7 @@ REPLACE PatientName ANON
         recipe_path,
         variables: HashMap::new(),
         functions: HashMap::new(),
+        salt: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -292,6 +293,7 @@ fn pipeline_multiple_files_nested_dirs() {
         recipe_path,
         variables: HashMap::new(),
         functions: HashMap::new(),
+        salt: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -430,6 +432,7 @@ REPLACE PatientName ANON
         recipe_path,
         variables: HashMap::new(),
         functions: HashMap::new(),
+        salt: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -754,6 +757,7 @@ REPLACE PatientName ANON
         recipe_path,
         variables: HashMap::new(),
         functions: HashMap::new(),
+        salt: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -816,6 +820,7 @@ fn pipeline_no_blacklist_no_report_file() {
         recipe_path,
         variables: HashMap::new(),
         functions: HashMap::new(),
+        salt: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -828,5 +833,69 @@ fn pipeline_no_blacklist_no_report_file() {
     assert!(
         !report_path.exists(),
         "blacklisted_files.txt should NOT exist when no files are blacklisted"
+    );
+}
+
+/// Requirement r-3-6-1
+#[test]
+fn pipeline_salt_applied_to_hashuid_patient_id() {
+    let tmp = TempDir::new().expect("should create temp dir");
+    let input_dir = tmp.path().join("input");
+    fs::create_dir_all(&input_dir).expect("create input dir");
+
+    let mut ct_file = create_test_file_obj();
+    put_str(&mut ct_file, tags::MODALITY, VR::CS, "CT");
+    put_str(&mut ct_file, tags::PATIENT_ID, VR::LO, "MRN-12345");
+    ct_file
+        .write_to_file(input_dir.join("ct.dcm"))
+        .expect("write CT file");
+
+    let recipe_path = tmp.path().join("recipe.txt");
+    fs::write(
+        &recipe_path,
+        "FORMAT dicom\n%header\nREPLACE PatientID func:hashuid\n",
+    )
+    .expect("write recipe");
+
+    let run = |out: &str, salt: Option<&str>| -> String {
+        let output_dir = tmp.path().join(out);
+        let config = DeidConfig {
+            input_dir: input_dir.clone(),
+            output_dir: output_dir.clone(),
+            recipe_path: recipe_path.clone(),
+            variables: HashMap::new(),
+            functions: HashMap::new(),
+            salt: salt.map(str::to_string),
+        };
+        let pipeline = DeidPipeline::new(config).expect("should create pipeline");
+        pipeline.run().expect("should run pipeline");
+        let result = open_file(output_dir.join("ct.dcm")).expect("should open output");
+        result
+            .element(tags::PATIENT_ID)
+            .expect("should have PatientID")
+            .value()
+            .to_str()
+            .expect("should read value")
+            .to_string()
+    };
+
+    let unsalted = run("out-unsalted", None);
+    let salted = run("out-salted", Some("pepper"));
+    let salted_again = run("out-salted-again", Some("pepper"));
+
+    assert_ne!(unsalted, "MRN-12345", "PatientID should be replaced");
+    assert_ne!(
+        unsalted, salted,
+        "salted hashuid should differ from unsalted"
+    );
+    assert_eq!(
+        salted, salted_again,
+        "same salt should reproduce the same hash across runs"
+    );
+    // Known-answer from the companion Python implementation:
+    // "2.25." + str(int.from_bytes(sha256(b"pepperMRN-12345").digest()[:16], "big"))
+    assert_eq!(
+        salted, "2.25.236350546493157369760816461380098478256",
+        "salted output should match the Python reference implementation"
     );
 }

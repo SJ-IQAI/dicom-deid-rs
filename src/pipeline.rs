@@ -20,6 +20,13 @@ pub struct DeidConfig {
     pub recipe_path: PathBuf,
     pub variables: HashMap<String, String>,
     pub functions: HashMap<String, DeidFunction>,
+    /// Optional salt for the built-in `hashuid` function, prepended
+    /// to the value before SHA-256 hashing (`SHA-256(salt + value)`),
+    /// matching the companion Python implementation. Must be kept
+    /// stable across runs to preserve longitudinal consistency of
+    /// hashed values. `None` preserves unsalted (plain SHA-256)
+    /// behavior.
+    pub salt: Option<String>,
 }
 
 /// Summary report after de-identification completes.
@@ -50,7 +57,7 @@ impl DeidPipeline {
     pub fn new(mut config: DeidConfig) -> Result<Self, DeidError> {
         let recipe_text = fs::read_to_string(&config.recipe_path)?;
         let recipe = Recipe::parse(&recipe_text)?;
-        let mut merged = functions::default_functions();
+        let mut merged = functions::default_functions(config.salt.as_deref());
         for (name, func) in config.functions.drain() {
             merged.insert(name, func);
         }
@@ -66,7 +73,7 @@ impl DeidPipeline {
     /// Create a new pipeline from recipe text directly (avoids temp files).
     pub fn from_recipe_text(recipe_text: &str, mut config: DeidConfig) -> Result<Self, DeidError> {
         let recipe = Recipe::parse(recipe_text)?;
-        let mut merged = functions::default_functions();
+        let mut merged = functions::default_functions(config.salt.as_deref());
         for (name, func) in config.functions.drain() {
             merged.insert(name, func);
         }
@@ -324,6 +331,7 @@ mod tests {
             recipe_path: PathBuf::from("/tmp/recipe.txt"),
             variables: HashMap::new(),
             functions: HashMap::new(),
+            salt: None,
         };
         assert_eq!(config.input_dir, PathBuf::from("/tmp/input"));
         assert_eq!(config.output_dir, PathBuf::from("/tmp/output"));
@@ -430,6 +438,7 @@ mod tests {
             recipe_path,
             variables: HashMap::new(),
             functions: HashMap::new(),
+            salt: None,
         };
 
         let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -534,6 +543,7 @@ mod tests {
             recipe_path,
             variables: HashMap::new(),
             functions: HashMap::new(),
+            salt: None,
         };
 
         let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -591,6 +601,7 @@ mod tests {
             recipe_path: PathBuf::new(),
             variables: HashMap::new(),
             functions: HashMap::new(),
+            salt: None,
         };
 
         let pipeline =
