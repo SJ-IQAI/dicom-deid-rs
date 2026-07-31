@@ -1,7 +1,6 @@
 # Running dicom-deid-rs
 
-Step-by-step instructions for building and running the de-identification tool,
-plus notes on the "keep-only" recipe at `resources/keep-only-recipe.txt`.
+Notes on how to run this fork of dicom-deid-rs.
 
 ## 1. Build
 
@@ -81,11 +80,9 @@ Two behaviors are hard-coded in the tool regardless of recipe content:
 - Header actions **recurse into sequences**, so a `REMOVE PersonName`-style
   rule also applies to matching tags nested in sequence items.
 
-## 4. The keep-only recipe (`resources/keep-only-recipe.txt`)
+## 4. The keep-only recipe
 
-The goal: preserve only your allowlist of ~50 tags (times, patient
-characteristics, device identifiers, geometry/scaling tags, `Modality`,
-`InstitutionName`, etc.) and eliminate PHI everywhere else.
+The goal: preserve only your allowlist of tags and eliminate PHI everywhere else.
 
 ### How "keep only" is implemented
 
