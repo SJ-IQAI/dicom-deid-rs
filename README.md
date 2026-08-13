@@ -134,6 +134,31 @@ Precedence when multiple actions target the same tag: KEEP > ADD > REPLACE > JIT
 - Bare hex: `00120063`
 - Parenthesized: `(0008,0050)`
 
+## File Meta Information
+
+The File Meta Information group (group 0002) is de-identified automatically on
+every file, regardless of recipe content, and recipes cannot address it. This
+follows DICOM PS3.15 E.1.1 and matches CTP, which rebuilds the group from the
+de-identified data set.
+
+| Tag                                     | Handling                                     |
+|-----------------------------------------|----------------------------------------------|
+| `(0002,0002)` MediaStorageSOPClassUID    | Set from the data set's `SOPClassUID`        |
+| `(0002,0003)` MediaStorageSOPInstanceUID | Set from the data set's `SOPInstanceUID`     |
+| `(0002,0010)` TransferSyntaxUID          | Preserved (governs readability)              |
+| `(0002,0012)` ImplementationClassUID     | Stamped with this tool's identity            |
+| `(0002,0013)` ImplementationVersionName  | Stamped with this tool's version             |
+| `(0002,0016/0017/0018)` AE Titles        | Removed                                      |
+| `(0002,0100)`/`(0002,0102)` Private Info | Removed                                      |
+
+Without this, `REPLACE SOPInstanceUID func:hashuid` would hash `(0008,0018)`
+while leaving the original UID in `(0002,0003)`, so every output file would
+still carry a key linking it back to the source archive.
+
+A data set left with no `SOPInstanceUID` cannot satisfy this and **aborts the
+run** rather than being skipped — it indicates a malformed recipe or corrupt
+input, so continuing would produce a whole run of suspect output.
+
 ## Library Usage
 
 ```rust

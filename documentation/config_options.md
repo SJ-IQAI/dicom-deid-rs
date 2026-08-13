@@ -11,7 +11,7 @@ source code (`src/main.rs`, `src/pipeline.rs`, `src/metadata.rs`,
 **No.** There is no option for this, and the current behavior actively works
 against it: the output path is computed by stripping the input directory
 prefix and re-joining the remainder onto the output directory
-(`src/pipeline.rs:159-163`):
+(`src/pipeline.rs:177-180`):
 
 ```rust
 let relative = file_path.strip_prefix(&self.config.input_dir)?;
@@ -44,7 +44,7 @@ directory names.
 
 **No.** The tool never writes a mapping of original → de-identified values.
 The only per-file record it produces is `blacklisted_files.txt` in the output
-directory (`src/pipeline.rs:282-291`), which lists files that were *excluded*
+directory (`src/pipeline.rs:323-331`), which lists files that were *excluded*
 from output and the filter rule that matched — it contains no value mappings.
 
 Two nuances worth understanding:
@@ -79,7 +79,7 @@ CLI does it.
 ## 3. What are the date and time shift options, and how do I use them?
 
 The single date-shifting mechanism is the **`JITTER`** header action
-(`src/metadata.rs:73-107`).
+(`src/metadata.rs:74-108`).
 
 ### What JITTER does
 

@@ -33,7 +33,7 @@ fn put_str(obj: &mut InMemDicomObject, tag: Tag, vr: VR, value: &str) {
 }
 
 fn create_test_file_obj() -> FileDicomObject<InMemDicomObject> {
-    FileDicomObject::new_empty_with_meta(
+    let mut obj = FileDicomObject::new_empty_with_meta(
         FileMetaTableBuilder::new()
             .transfer_syntax("1.2.840.10008.1.2.1")
             .media_storage_sop_class_uid("1.2.840.10008.5.1.4.1.1.2")
@@ -41,7 +41,15 @@ fn create_test_file_obj() -> FileDicomObject<InMemDicomObject> {
             .implementation_class_uid("1.2.3.4")
             .build()
             .expect("valid file meta"),
-    )
+    );
+    // (0008,0018) is Type 1, and the file meta sync (r-3-14) requires it.
+    put_str(
+        &mut obj,
+        tags::SOP_INSTANCE_UID,
+        VR::UI,
+        "1.2.3.4.5.6.7.8.9",
+    );
+    obj
 }
 
 fn empty_vars() -> HashMap<String, String> {
@@ -275,6 +283,12 @@ fn pipeline_multiple_files_nested_dirs() {
         );
         put_str(&mut file_obj, tags::PATIENT_NAME, VR::PN, "John^Doe");
         put_str(&mut file_obj, tags::MODALITY, VR::CS, "CT");
+        put_str(
+            &mut file_obj,
+            tags::SOP_INSTANCE_UID,
+            VR::UI,
+            &format!("1.2.3.4.5.6.7.8.{}", uid_suffix),
+        );
         file_obj
             .write_to_file(dir.join(name))
             .expect("write DICOM file");
@@ -897,5 +911,117 @@ fn pipeline_salt_applied_to_hashuid_patient_id() {
     assert_eq!(
         salted, "2.25.236350546493157369760816461380098478256",
         "salted output should match the Python reference implementation"
+    );
+}
+
+// ============================================================================
+// Category 6: File Meta Information de-identification (r-3-14)
+// ============================================================================
+
+/// Requirement r-3-14: with the shipped recipe, the original SOP Instance UID
+/// must not survive anywhere in the output file, including the meta group.
+#[test]
+fn pipeline_file_meta_carries_no_original_sop_instance_uid() {
+    const ORIGINAL_UID: &str = "1.2.3.4.5.6.7.8.9";
+
+    let tmp = TempDir::new().expect("create temp dir");
+    let input_dir = tmp.path().join("input");
+    let output_dir = tmp.path().join("output");
+    fs::create_dir_all(&input_dir).expect("create input dir");
+
+    let mut file_obj = create_test_file_obj();
+    put_str(&mut file_obj, tags::PATIENT_NAME, VR::PN, "John^Doe");
+    put_str(&mut file_obj, tags::MODALITY, VR::CS, "CT");
+    put_str(
+        &mut file_obj,
+        tags::SOP_CLASS_UID,
+        VR::UI,
+        "1.2.840.10008.5.1.4.1.1.2",
+    );
+    // Non-empty and non-derived, so the recipe's blacklist rules do not match.
+    put_str(
+        &mut file_obj,
+        tags::IMAGE_TYPE,
+        VR::CS,
+        "ORIGINAL\\PRIMARY\\AXIAL",
+    );
+    // Meta-group PHI that must not reach the output.
+    file_obj.update_meta(|meta| {
+        meta.source_application_entity_title = Some("ST_JUDE_CT01".into());
+        meta.private_information = Some(vec![0xDE, 0xAD]);
+    });
+    file_obj
+        .write_to_file(input_dir.join("ct.dcm"))
+        .expect("write DICOM file");
+
+    // The recipe references these; JITTER resolves its value before checking
+    // whether the target date tag is present, so DATEINC is required even
+    // though this fixture has no date tags.
+    let variables = HashMap::from([
+        ("PATIENT_ID".to_string(), "ANON-001".to_string()),
+        ("PATIENT_NAME".to_string(), "ANON".to_string()),
+        ("DATEINC".to_string(), "30".to_string()),
+    ]);
+
+    let config = DeidConfig {
+        input_dir,
+        output_dir: output_dir.clone(),
+        recipe_path: "resources/test_recipe.txt".into(),
+        variables,
+        functions: HashMap::new(),
+        salt: None,
+    };
+
+    let pipeline = DeidPipeline::new(config).expect("should create pipeline");
+    let report = pipeline.run().expect("should run pipeline");
+    assert_eq!(
+        report.files_processed, 1,
+        "processed={} blacklisted={} skipped={}",
+        report.files_processed, report.files_blacklisted, report.files_skipped
+    );
+
+    let out_path = output_dir.join("ct.dcm");
+    let result = open_file(&out_path).expect("should open output");
+
+    let data_set_uid = result
+        .element(tags::SOP_INSTANCE_UID)
+        .expect("should have SOPInstanceUID")
+        .value()
+        .to_str()
+        .expect("should read value")
+        .to_string();
+
+    assert!(
+        data_set_uid.starts_with("2.25."),
+        "recipe should hash the SOP Instance UID, got {}",
+        data_set_uid
+    );
+    assert_eq!(
+        result.meta().media_storage_sop_instance_uid(),
+        data_set_uid,
+        "(0002,0003) must equal (0008,0018)"
+    );
+    assert!(
+        result.meta().source_application_entity_title.is_none(),
+        "source AE title should be dropped"
+    );
+    assert!(
+        result.meta().private_information.is_none(),
+        "meta private information should be dropped"
+    );
+    assert_eq!(
+        result.meta().transfer_syntax(),
+        "1.2.840.10008.1.2.1",
+        "transfer syntax must be preserved"
+    );
+
+    // The strongest check: the original UID must not appear anywhere in the
+    // written bytes, meta group or data set.
+    let bytes = fs::read(&out_path).expect("read output bytes");
+    let needle = ORIGINAL_UID.as_bytes();
+    assert!(
+        !bytes.windows(needle.len()).any(|w| w == needle),
+        "original SOP Instance UID {} still present in the output file",
+        ORIGINAL_UID
     );
 }

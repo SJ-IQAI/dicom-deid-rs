@@ -2,6 +2,7 @@ use crate::error::DeidError;
 use crate::metadata::DeidFunction;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::sync::OnceLock;
 
 /// Generate a DICOM UID from the SHA-256 hash of the input value.
 ///
@@ -37,6 +38,38 @@ fn hashuid(input: &str, salt: Option<&str>) -> Result<String, DeidError> {
     let uid = format!("2.25.{}", num);
     // DICOM UIDs must be at most 64 characters
     Ok(uid[..uid.len().min(64)].to_string())
+}
+
+/// The Implementation Class UID identifying this tool.
+///
+/// PS3.15 E.1.1 step 7 requires the File Meta Information to be
+/// replaced with "a description of the de-identifying application",
+/// which includes the implementation information in (0002,0012) and
+/// (0002,0013). This UID is derived deterministically from the package
+/// name via [`hashuid`], so it needs no registered UID root and is
+/// identical across every run.
+///
+/// The name deliberately excludes the version: (0002,0012) identifies
+/// the *implementation*, while the version is carried separately in
+/// (0002,0013) by [`implementation_version_name`].
+pub fn implementation_class_uid() -> &'static str {
+    static UID: OnceLock<String> = OnceLock::new();
+    UID.get_or_init(|| {
+        hashuid(env!("CARGO_PKG_NAME"), None).expect("hashuid over a fixed input cannot fail")
+    })
+}
+
+/// The Implementation Version Name for (0002,0013).
+///
+/// (0002,0013) has VR `SH`, which is limited to 16 characters, so this
+/// uses a shortened product name and is truncated defensively.
+pub fn implementation_version_name() -> &'static str {
+    static NAME: OnceLock<String> = OnceLock::new();
+    NAME.get_or_init(|| {
+        let mut name = format!("deid-rs {}", env!("CARGO_PKG_VERSION"));
+        name.truncate(16);
+        name
+    })
 }
 
 /// Return the default built-in functions available in recipes.

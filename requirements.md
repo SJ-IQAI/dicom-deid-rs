@@ -3,7 +3,7 @@ r-1-1 The software must accept a path to a directory of DICOM files as an input,
 r-1-2 The software must recursively search the input directory for all DICOM files
 r-1-3 The software must display a progress bar on the console as it processes input files
 r-1-4 The software must preserve the relative directory structure of input files in the output directory (e.g., input/sub/file.dcm → output/sub/file.dcm)
-r-1-5 The software must continue processing remaining files when an individual file fails, logging a warning and counting the file as skipped in the final report
+r-1-5 The software must continue processing remaining files when an individual file fails, logging a warning and counting the file as skipped in the final report. The sole exception is the fatal condition defined in r-3-14-1, which aborts the run.
 
 r-2 De-id Recipe Specification
 r-2-1 The software must parse a de-identification recipe file defining the deid operations to be performed
@@ -55,6 +55,13 @@ r-3-10 The software must support explicitly keeping a tag's original value uncha
 r-3-11 When multiple actions apply to the same field, the software must respect a precedence hierarchy: KEEP > ADD > REPLACE > JITTER > REMOVE > BLANK
 r-3-12 The software must support bulk removal of private tags from DICOM files
 r-3-13 All metadata de-identification actions (ADD, REPLACE, REMOVE, BLANK, KEEP, JITTER) and private tag removal must apply recursively to elements nested within DICOM sequences (VR=SQ) at any depth.
+
+r-3-14 The software must de-identify the File Meta Information group (group 0002) and keep it consistent with the de-identified data set. This must be applied unconditionally to every written file and must not be configurable or disableable from the recipe. Recipe header actions do not address group 0002 tags.
+r-3-14-1 Media Storage SOP Instance UID (0002,0003) must always equal the de-identified data set's SOP Instance UID (0008,0018). If the data set has no non-empty (0008,0018) after de-identification, the software must report the error and abort the run rather than writing the file; this is the exception to r-1-5.
+r-3-14-2 Media Storage SOP Class UID (0002,0002) must be set from the de-identified data set's SOP Class UID (0008,0016) when present, and left unchanged when the data set does not carry one.
+r-3-14-3 The software must remove the identifying optional File Meta Information elements named by DICOM PS3.15 E.1.1: Source Application Entity Title (0002,0016), Sending Application Entity Title (0002,0017), Receiving Application Entity Title (0002,0018), Private Information Creator UID (0002,0100), and Private Information (0002,0102).
+r-3-14-4 The software must set Implementation Class UID (0002,0012) and Implementation Version Name (0002,0013) to identify this de-identifying application. The Implementation Class UID must be deterministic across runs, and the Implementation Version Name must not exceed the 16-character limit of VR SH.
+r-3-14-5 Transfer Syntax UID (0002,0010) must not be modified by the File Meta Information de-identification, since it governs the ability to read the file back. It remains under the control of pixel data decompression (r-4-8).
 
 r-4 Pixel-based De-identification
 r-4-1 The software must support pixel-based de-identification by masking over pixel areas

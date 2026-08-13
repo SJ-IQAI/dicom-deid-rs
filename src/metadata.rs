@@ -1,4 +1,5 @@
 use crate::error::DeidError;
+use crate::functions;
 use crate::recipe::{ActionType, ActionValue, HeaderAction};
 use crate::tag::resolve_tags;
 use chrono::NaiveDate;
@@ -7,7 +8,8 @@ use dicom_core::header::Header;
 use dicom_core::value::{PrimitiveValue, Value};
 use dicom_core::{DataElement, Tag, VR};
 use dicom_dictionary_std::StandardDataDictionary;
-use dicom_object::InMemDicomObject;
+use dicom_dictionary_std::tags;
+use dicom_object::{DefaultDicomObject, InMemDicomObject};
 use std::collections::HashMap;
 
 /// A function that can be referenced via `func:<name>` in a recipe.
@@ -185,6 +187,84 @@ pub fn remove_private_tags(obj: &mut InMemDicomObject) {
         });
         obj.put(elem);
     }
+}
+
+/// Read a tag's value as a trimmed string, or `None` if the tag is
+/// absent or its value cannot be read as text.
+fn read_str(obj: &InMemDicomObject, tag: Tag) -> Option<String> {
+    let value = obj.element(tag).ok()?.value().to_str().ok()?;
+    Some(value.trim().to_string())
+}
+
+/// Bring the File Meta Information group into a de-identified,
+/// self-consistent state with the already-de-identified data set.
+///
+/// [`apply_header_actions`] operates on the data set only, and
+/// `write_to_file` serializes the stored meta table verbatim rather
+/// than re-deriving it. Without this step the original SOP Instance
+/// UID survives in (0002,0003) of every output file, defeating the
+/// point of hashing (0008,0018) and violating the PS3.10 requirement
+/// that the two match.
+///
+/// This mirrors what CTP does: it discards the input File Meta
+/// Information entirely and rebuilds it from the post-anonymization
+/// data set, keeping only the transfer syntax. Specifically, per
+/// PS3.15 E.1.1 step 7 ("Application Entity Titles, Presentation
+/// Addresses, implementation information, and private information"):
+///
+/// - (0002,0002) and (0002,0003) are re-derived from the data set
+/// - (0002,0012) and (0002,0013) are stamped with this tool's identity
+/// - (0002,0016), (0002,0017), (0002,0018) AE titles are dropped
+/// - (0002,0100) and (0002,0102) private information are dropped
+/// - (0002,0010) Transfer Syntax UID is **not** touched — it governs
+///   the ability to read the file back
+///
+/// Presentation addresses (0002,0026..0028) need no handling: dicom-rs
+/// discards unrecognized group 0002 elements when parsing, so they
+/// never reach the output. The 128-byte preamble is already zeroed on
+/// every write.
+///
+/// This is applied unconditionally by the pipeline and is not
+/// addressable from a recipe, so no recipe can disable or misconfigure
+/// it. CTP likewise short-circuits script actions on group 0002.
+///
+/// # Errors
+///
+/// Returns [`DeidError::FatalMeta`] — which aborts the whole run
+/// rather than skipping the file — when the data set has no usable
+/// (0008,0018) SOP Instance UID. A data set without one is invalid
+/// DICOM, and the alternatives are to leak the original UID or to
+/// write a zero-length Type 1 value, both of which are worse than
+/// stopping.
+pub fn sync_file_meta(obj: &mut DefaultDicomObject) -> Result<(), DeidError> {
+    let sop_instance_uid = read_str(obj, tags::SOP_INSTANCE_UID).filter(|s| !s.is_empty());
+    let sop_instance_uid = sop_instance_uid.ok_or_else(|| {
+        DeidError::FatalMeta(
+            "data set has no SOP Instance UID (0008,0018) after de-identification, so \
+             Media Storage SOP Instance UID (0002,0003) cannot be made consistent with it"
+                .to_string(),
+        )
+    })?;
+    let sop_class_uid = read_str(obj, tags::SOP_CLASS_UID).filter(|s| !s.is_empty());
+
+    obj.update_meta(|meta| {
+        meta.media_storage_sop_instance_uid = sop_instance_uid;
+        if let Some(sop_class_uid) = sop_class_uid {
+            meta.media_storage_sop_class_uid = sop_class_uid;
+        }
+
+        meta.implementation_class_uid = functions::implementation_class_uid().to_string();
+        meta.implementation_version_name =
+            Some(functions::implementation_version_name().to_string());
+
+        meta.source_application_entity_title = None;
+        meta.sending_application_entity_title = None;
+        meta.receiving_application_entity_title = None;
+        meta.private_information_creator_uid = None;
+        meta.private_information = None;
+    });
+
+    Ok(())
 }
 
 /// Return the precedence rank of an action type.
@@ -1909,5 +1989,176 @@ mod tests {
             seq_items[0].element(Tag(0x0009, 0x1001)).is_err(),
             "private data should be removed from sequence"
         );
+    }
+
+    // -- r-3-14 File meta information ----------------------------------------
+
+    /// Build a file object whose meta group carries a stale SOP Instance
+    /// UID plus the PHI-bearing optional fields named by PS3.15 E.1.1.
+    fn file_obj_with_dirty_meta() -> DefaultDicomObject {
+        let mut obj = create_test_file_obj();
+        obj.update_meta(|meta| {
+            meta.source_application_entity_title = Some("ST_JUDE_CT01".into());
+            meta.sending_application_entity_title = Some("SENDING_AE".into());
+            meta.receiving_application_entity_title = Some("RECEIVING_AE".into());
+            meta.private_information_creator_uid = Some("1.2.840.99999.1".into());
+            meta.private_information = Some(vec![0xDE, 0xAD, 0xBE, 0xEF]);
+        });
+        obj
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_sop_instance_uid_synced_from_data_set() {
+        let mut obj = create_test_file_obj();
+        assert_eq!(
+            obj.meta().media_storage_sop_instance_uid(),
+            "1.2.3.4.5.6.7.8.9",
+            "fixture should start with the original meta UID"
+        );
+        put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, "2.25.98765");
+
+        sync_file_meta(&mut obj).expect("should sync");
+
+        assert_eq!(
+            obj.meta().media_storage_sop_instance_uid(),
+            "2.25.98765",
+            "meta UID should track the de-identified data set UID"
+        );
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_sync_is_noop_when_already_consistent() {
+        let mut obj = create_test_file_obj();
+        put_str(
+            &mut obj,
+            tags::SOP_INSTANCE_UID,
+            VR::UI,
+            "1.2.3.4.5.6.7.8.9",
+        );
+
+        sync_file_meta(&mut obj).expect("should sync");
+
+        assert_eq!(
+            obj.meta().media_storage_sop_instance_uid(),
+            "1.2.3.4.5.6.7.8.9"
+        );
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_sop_class_uid_synced_from_data_set() {
+        let mut obj = create_test_file_obj();
+        put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, "2.25.1");
+        put_str(
+            &mut obj,
+            tags::SOP_CLASS_UID,
+            VR::UI,
+            "1.2.840.10008.5.1.4.1.1.7",
+        );
+
+        sync_file_meta(&mut obj).expect("should sync");
+
+        assert_eq!(
+            obj.meta().media_storage_sop_class_uid(),
+            "1.2.840.10008.5.1.4.1.1.7"
+        );
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_sop_class_uid_left_alone_when_data_set_lacks_it() {
+        let mut obj = create_test_file_obj();
+        put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, "2.25.1");
+
+        sync_file_meta(&mut obj).expect("should sync");
+
+        assert_eq!(
+            obj.meta().media_storage_sop_class_uid(),
+            "1.2.840.10008.5.1.4.1.1.2",
+            "absent data set SOP Class UID should leave the meta value untouched"
+        );
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_missing_sop_instance_uid_is_fatal() {
+        let mut obj = create_test_file_obj();
+
+        let err = sync_file_meta(&mut obj).expect_err("absent SOP Instance UID should error");
+
+        assert!(err.is_fatal(), "should abort the run, not skip the file");
+        assert!(matches!(err, DeidError::FatalMeta(_)));
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_empty_sop_instance_uid_is_fatal() {
+        for value in ["", "   "] {
+            let mut obj = create_test_file_obj();
+            put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, value);
+
+            let err = match sync_file_meta(&mut obj) {
+                Err(e) => e,
+                Ok(()) => panic!("empty UID {:?} should error", value),
+            };
+
+            assert!(err.is_fatal());
+        }
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_phi_fields_are_dropped() {
+        let mut obj = file_obj_with_dirty_meta();
+        put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, "2.25.1");
+
+        sync_file_meta(&mut obj).expect("should sync");
+
+        let meta = obj.meta();
+        assert!(meta.source_application_entity_title.is_none());
+        assert!(meta.sending_application_entity_title.is_none());
+        assert!(meta.receiving_application_entity_title.is_none());
+        assert!(meta.private_information_creator_uid.is_none());
+        assert!(meta.private_information.is_none());
+    }
+
+    /// Requirement r-3-14
+    #[test]
+    fn r3_14_meta_implementation_info_is_stamped() {
+        let mut obj = create_test_file_obj();
+        put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, "2.25.1");
+
+        sync_file_meta(&mut obj).expect("should sync");
+
+        let meta = obj.meta();
+        assert_ne!(
+            meta.implementation_class_uid, "1.2.3.4",
+            "the source implementation class UID should be overwritten"
+        );
+        assert!(meta.implementation_class_uid.starts_with("2.25."));
+        let version = meta
+            .implementation_version_name
+            .as_deref()
+            .expect("version name should be stamped");
+        assert!(version.starts_with("deid-rs"));
+        assert!(
+            version.len() <= 16,
+            "(0002,0013) is VR SH, max 16 chars, got {}",
+            version.len()
+        );
+    }
+
+    /// Requirement r-3-14: the transfer syntax governs readability and
+    /// must survive the sync untouched.
+    #[test]
+    fn r3_14_meta_transfer_syntax_untouched() {
+        let mut obj = file_obj_with_dirty_meta();
+        put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, "2.25.1");
+
+        sync_file_meta(&mut obj).expect("should sync");
+
+        assert_eq!(obj.meta().transfer_syntax(), "1.2.840.10008.1.2.1");
     }
 }

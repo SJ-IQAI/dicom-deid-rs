@@ -61,6 +61,14 @@ De-identification complete:
   **A non-zero skipped count means those files were not de-identified or
   copied — always investigate the warnings.**
 
+One condition aborts the whole run instead of skipping a file: a data set left
+with no `SOPInstanceUID` (0008,0018), which makes it impossible to de-identify
+`(0002,0003)` consistently. You will see
+`Error running pipeline: File meta information cannot be de-identified: ...`
+and a non-zero exit code. The usual cause is a recipe that removes or blanks
+`SOPInstanceUID`; replace it (e.g. `REPLACE SOPInstanceUID func:hashuid`)
+instead.
+
 ## 3. What a recipe does
 
 A recipe has up to three kinds of sections (see `README.md` for full syntax):
@@ -73,12 +81,17 @@ A recipe has up to three kinds of sections (see `README.md` for full syntax):
   `KEEP`, `JITTER`. When several actions target the same tag, precedence is
   `KEEP > ADD > REPLACE > JITTER > REMOVE > BLANK`.
 
-Two behaviors are hard-coded in the tool regardless of recipe content:
+Three behaviors are hard-coded in the tool regardless of recipe content:
 
 - **All private (odd-group) tags are removed automatically** from every file,
   including inside nested sequences.
 - Header actions **recurse into sequences**, so a `REMOVE PersonName`-style
   rule also applies to matching tags nested in sequence items.
+- **The File Meta Information group (group 0002) is de-identified and kept
+  consistent with the data set.** `(0002,0003)` always ends up equal to the
+  de-identified `(0008,0018)`, AE titles and meta private information are
+  dropped, and the transfer syntax is preserved. Recipes cannot address group
+  0002 tags. See README.md for the full table.
 
 ## 4. The keep-only recipe
 

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 #[cfg(feature = "parallel")]
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// Configuration for the de-identification pipeline.
 pub struct DeidConfig {
@@ -120,6 +120,10 @@ impl DeidPipeline {
                     blacklisted_files.push((relative.to_path_buf(), reason));
                     report.files_blacklisted += 1;
                 }
+                Err(e) if e.is_fatal() => {
+                    pb.abandon_with_message("De-identification aborted");
+                    return Err(e);
+                }
                 Err(e) => {
                     pb.println(format!("Warning: skipping {}: {}", file_path.display(), e));
                     report.files_skipped += 1;
@@ -163,6 +167,12 @@ impl DeidPipeline {
         )?;
         metadata::remove_private_tags(&mut obj);
 
+        // Bring the file meta group in line with the de-identified data
+        // set. Must come last: it reads the final data set values, and
+        // it runs after pixel decompression has settled the transfer
+        // syntax.
+        metadata::sync_file_meta(&mut obj)?;
+
         // Compute output path preserving directory structure
         let relative = file_path
             .strip_prefix(&self.config.input_dir)
@@ -203,6 +213,7 @@ impl DeidPipeline {
                     blacklisted_files.push((relative.to_path_buf(), reason));
                     report.files_blacklisted += 1;
                 }
+                Err(e) if e.is_fatal() => return Err(e),
                 Err(e) => {
                     eprintln!("Warning: skipping {}: {}", file_path.display(), e);
                     report.files_skipped += 1;
@@ -245,8 +256,17 @@ impl DeidPipeline {
         let blacklisted_files: std::sync::Mutex<Vec<(PathBuf, String)>> =
             std::sync::Mutex::new(Vec::new());
 
+        // `for_each` cannot early-return, so a fatal error sets an abort
+        // flag that the remaining items check on entry. Files already in
+        // flight still finish; that is acceptable on an abort path.
+        let abort = AtomicBool::new(false);
+        let fatal: std::sync::Mutex<Option<DeidError>> = std::sync::Mutex::new(None);
+
         pool.install(|| {
             files.par_iter().for_each(|file_path| {
+                if abort.load(Ordering::Relaxed) {
+                    return;
+                }
                 match self.process_file(file_path) {
                     Ok(FileOutcome::Processed) => {
                         processed.fetch_add(1, Ordering::Relaxed);
@@ -261,6 +281,14 @@ impl DeidPipeline {
                             .push((relative.to_path_buf(), reason));
                         blacklisted_count.fetch_add(1, Ordering::Relaxed);
                     }
+                    Err(e) if e.is_fatal() => {
+                        abort.store(true, Ordering::Relaxed);
+                        let mut slot = fatal.lock().unwrap();
+                        if slot.is_none() {
+                            *slot = Some(e);
+                        }
+                        return;
+                    }
                     Err(e) => {
                         eprintln!("Warning: skipping {}: {}", file_path.display(), e);
                         skipped.fetch_add(1, Ordering::Relaxed);
@@ -273,6 +301,12 @@ impl DeidPipeline {
                 );
             });
         });
+
+        // Abort before writing any report: on a fatal error the run's
+        // output is suspect as a whole.
+        if let Some(e) = fatal.into_inner().unwrap() {
+            return Err(e);
+        }
 
         let blacklisted_files = blacklisted_files.into_inner().unwrap();
         if !blacklisted_files.is_empty() {
@@ -419,6 +453,13 @@ mod tests {
             dicom_core::VR::CS,
             "CT",
         );
+        // Type 1: required for the file meta sync (r-3-14)
+        put_str(
+            &mut file_obj,
+            dicom_dictionary_std::tags::SOP_INSTANCE_UID,
+            dicom_core::VR::UI,
+            "1.2.3.4.5.6.7.8.9",
+        );
         let dcm_path = input_dir.join("test.dcm");
         file_obj
             .write_to_file(&dcm_path)
@@ -525,6 +566,13 @@ mod tests {
                 dicom_core::VR::CS,
                 "CT",
             );
+            // Type 1: required for the file meta sync (r-3-14)
+            put_str(
+                &mut file_obj,
+                dicom_dictionary_std::tags::SOP_INSTANCE_UID,
+                dicom_core::VR::UI,
+                &format!("1.2.3.4.5.6.7.8.{}", i),
+            );
             file_obj
                 .write_to_file(input_dir.join(format!("test_{}.dcm", i)))
                 .expect("write test DICOM file");
@@ -567,6 +615,178 @@ mod tests {
         }
     }
 
+    // -- r-3-14 ---------------------------------------------------------------
+
+    /// Requirement r-3-14: a full run must leave (0002,0003) equal to the
+    /// hashed (0008,0018), with the original UID gone from the meta group.
+    #[test]
+    fn r3_14_run_syncs_file_meta_with_hashed_sop_instance_uid() {
+        use crate::test_helpers::*;
+
+        let tmp = TempDir::new().expect("should create temp dir");
+        let input_dir = tmp.path().join("input");
+        let output_dir = tmp.path().join("output");
+        fs::create_dir_all(&input_dir).expect("create input dir");
+
+        // create_test_file_obj seeds meta (0002,0003) with this value.
+        const ORIGINAL_UID: &str = "1.2.3.4.5.6.7.8.9";
+
+        let mut file_obj = create_test_file_obj();
+        put_str(
+            &mut file_obj,
+            dicom_dictionary_std::tags::SOP_INSTANCE_UID,
+            dicom_core::VR::UI,
+            ORIGINAL_UID,
+        );
+        put_str(
+            &mut file_obj,
+            dicom_dictionary_std::tags::MODALITY,
+            dicom_core::VR::CS,
+            "CT",
+        );
+        file_obj
+            .write_to_file(input_dir.join("test.dcm"))
+            .expect("write test DICOM file");
+
+        let recipe_text = "FORMAT dicom\n%header\nREPLACE SOPInstanceUID func:hashuid\n";
+        let config = DeidConfig {
+            input_dir,
+            output_dir: output_dir.clone(),
+            recipe_path: PathBuf::new(),
+            variables: HashMap::new(),
+            functions: HashMap::new(),
+            salt: None,
+        };
+
+        let pipeline =
+            DeidPipeline::from_recipe_text(recipe_text, config).expect("should create pipeline");
+        let report = pipeline
+            .run_with_progress(|_, _, _| {})
+            .expect("should run pipeline");
+        assert_eq!(report.files_processed, 1);
+
+        let result = open_file(output_dir.join("test.dcm")).expect("should open output");
+        let data_set_uid = result
+            .element(dicom_dictionary_std::tags::SOP_INSTANCE_UID)
+            .expect("should have SOPInstanceUID")
+            .value()
+            .to_str()
+            .expect("should read value")
+            .to_string();
+
+        assert!(
+            data_set_uid.starts_with("2.25."),
+            "data set UID should be hashed, got {}",
+            data_set_uid
+        );
+        assert_eq!(
+            result.meta().media_storage_sop_instance_uid(),
+            data_set_uid,
+            "(0002,0003) must equal (0008,0018)"
+        );
+        assert_ne!(
+            result.meta().media_storage_sop_instance_uid(),
+            ORIGINAL_UID,
+            "the original SOP Instance UID must not survive in the meta group"
+        );
+        assert_eq!(
+            result.meta().transfer_syntax(),
+            "1.2.840.10008.1.2.1",
+            "transfer syntax must be preserved"
+        );
+    }
+
+    /// Requirement r-3-14: a data set left without a SOP Instance UID
+    /// aborts the run rather than being counted as skipped.
+    #[test]
+    fn r3_14_missing_sop_instance_uid_aborts_run() {
+        use crate::test_helpers::*;
+
+        let tmp = TempDir::new().expect("should create temp dir");
+        let input_dir = tmp.path().join("input");
+        let output_dir = tmp.path().join("output");
+        fs::create_dir_all(&input_dir).expect("create input dir");
+
+        let mut file_obj = create_test_file_obj();
+        put_str(
+            &mut file_obj,
+            dicom_dictionary_std::tags::SOP_INSTANCE_UID,
+            dicom_core::VR::UI,
+            "1.2.3.4.5.6.7.8.9",
+        );
+        file_obj
+            .write_to_file(input_dir.join("test.dcm"))
+            .expect("write test DICOM file");
+
+        let recipe_text = "FORMAT dicom\n%header\nREMOVE SOPInstanceUID\n";
+        let config = DeidConfig {
+            input_dir,
+            output_dir: output_dir.clone(),
+            recipe_path: PathBuf::new(),
+            variables: HashMap::new(),
+            functions: HashMap::new(),
+            salt: None,
+        };
+
+        let pipeline =
+            DeidPipeline::from_recipe_text(recipe_text, config).expect("should create pipeline");
+        let err = match pipeline.run_with_progress(|_, _, _| {}) {
+            Err(e) => e,
+            Ok(_) => panic!("should abort the run"),
+        };
+
+        assert!(err.is_fatal(), "should be fatal, not a per-file skip");
+        assert!(
+            !output_dir.join("test.dcm").exists(),
+            "no output file should be written"
+        );
+    }
+
+    /// Requirement r-3-14: the fatal abort also applies to the parallel
+    /// runner, which cannot early-return out of `for_each`.
+    #[cfg(feature = "parallel")]
+    #[test]
+    fn r3_14_missing_sop_instance_uid_aborts_parallel_run() {
+        use crate::test_helpers::*;
+
+        let tmp = TempDir::new().expect("should create temp dir");
+        let input_dir = tmp.path().join("input");
+        let output_dir = tmp.path().join("output");
+        fs::create_dir_all(&input_dir).expect("create input dir");
+
+        for i in 0..10 {
+            let mut file_obj = create_test_file_obj();
+            put_str(
+                &mut file_obj,
+                dicom_dictionary_std::tags::SOP_INSTANCE_UID,
+                dicom_core::VR::UI,
+                &format!("1.2.3.4.5.6.7.8.{}", i),
+            );
+            file_obj
+                .write_to_file(input_dir.join(format!("test_{}.dcm", i)))
+                .expect("write test DICOM file");
+        }
+
+        let recipe_text = "FORMAT dicom\n%header\nREMOVE SOPInstanceUID\n";
+        let config = DeidConfig {
+            input_dir,
+            output_dir: output_dir.clone(),
+            recipe_path: PathBuf::new(),
+            variables: HashMap::new(),
+            functions: HashMap::new(),
+            salt: None,
+        };
+
+        let pipeline =
+            DeidPipeline::from_recipe_text(recipe_text, config).expect("should create pipeline");
+        let err = match pipeline.run_parallel(4, |_, _, _| {}) {
+            Err(e) => e,
+            Ok(_) => panic!("should abort the run"),
+        };
+
+        assert!(err.is_fatal(), "should be fatal, not a per-file skip");
+    }
+
     /// from_recipe_text avoids needing a recipe file on disk
     #[test]
     fn from_recipe_text_works() {
@@ -589,6 +809,13 @@ mod tests {
             dicom_dictionary_std::tags::MODALITY,
             dicom_core::VR::CS,
             "CT",
+        );
+        // Type 1: required for the file meta sync (r-3-14)
+        put_str(
+            &mut file_obj,
+            dicom_dictionary_std::tags::SOP_INSTANCE_UID,
+            dicom_core::VR::UI,
+            "1.2.3.4.5.6.7.8.9",
         );
         file_obj
             .write_to_file(input_dir.join("test.dcm"))
