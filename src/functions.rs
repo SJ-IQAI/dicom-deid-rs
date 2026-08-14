@@ -40,6 +40,61 @@ fn hashuid(input: &str, salt: Option<&str>) -> Result<String, DeidError> {
     Ok(uid[..uid.len().min(64)].to_string())
 }
 
+/// The RFC 4648 base32 alphabet, lowercased.
+const BASE32_ALPHABET_LOWER: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+
+/// Encode bytes as lowercase RFC 4648 base32 without `=` padding.
+fn base32_encode_lower_unpadded(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len().div_ceil(5) * 8);
+    let mut buffer: u16 = 0;
+    let mut bits: u8 = 0;
+    for &byte in bytes {
+        buffer = (buffer << 8) | byte as u16;
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            out.push(BASE32_ALPHABET_LOWER[((buffer >> bits) & 0x1f) as usize] as char);
+        }
+    }
+    if bits > 0 {
+        // Pad the trailing partial group with zero bits, as base32 does
+        // before the `=` characters that we omit.
+        out.push(BASE32_ALPHABET_LOWER[((buffer << (5 - bits)) & 0x1f) as usize] as char);
+    }
+    out
+}
+
+/// Hash a value into a short lowercase alphanumeric identifier.
+///
+/// Unlike [`hashuid`], the output is not a DICOM UID: it is the base32
+/// encoding of the first 15 bytes of the digest, lowercased, which
+/// suits identifier-style fields such as PatientID and
+/// AccessionNumber. 15 bytes is 120 bits, an exact multiple of 5, so
+/// the encoding is always 24 characters with no `=` padding.
+///
+/// When a salt is provided, it is prepended to the input before
+/// hashing, so the digest is `SHA-256(salt + input)`. This exactly
+/// matches the companion Python implementation:
+///
+/// ```python
+/// digest = hashlib.sha256(f"{salt}{value}".encode("utf-8")).digest()
+/// return base64.b32encode(digest[:15]).decode("ascii").rstrip("=").lower()
+/// ```
+///
+/// No salt (or an empty salt) is plain SHA-256 of the input.
+///
+/// This is deterministic: the same input and salt always produce the
+/// same output.
+fn hashuid_ascii(input: &str, salt: Option<&str>) -> Result<String, DeidError> {
+    let mut hasher = Sha256::new();
+    if let Some(salt) = salt {
+        hasher.update(salt.as_bytes());
+    }
+    hasher.update(input.as_bytes());
+    let digest = hasher.finalize();
+    Ok(base32_encode_lower_unpadded(&digest[..15]))
+}
+
 /// The Implementation Class UID identifying this tool.
 ///
 /// PS3.15 E.1.1 step 7 requires the File Meta Information to be
@@ -74,14 +129,19 @@ pub fn implementation_version_name() -> &'static str {
 
 /// Return the default built-in functions available in recipes.
 ///
-/// If `salt` is provided, it is captured by the built-in `hashuid`
-/// function and mixed into every hash it produces.
+/// If `salt` is provided, it is captured by the built-in hashing
+/// functions and mixed into every hash they produce.
 pub fn default_functions(salt: Option<&str>) -> HashMap<String, DeidFunction> {
     let salt = salt.map(str::to_string);
+    let ascii_salt = salt.clone();
     let mut map: HashMap<String, DeidFunction> = HashMap::new();
     map.insert(
         "hashuid".into(),
         Box::new(move |input: &str| hashuid(input, salt.as_deref())),
+    );
+    map.insert(
+        "hashuid_ascii".into(),
+        Box::new(move |input: &str| hashuid_ascii(input, ascii_salt.as_deref())),
     );
     map
 }
@@ -178,6 +238,125 @@ mod tests {
         );
     }
 
+    /// Requirement r-3-6-2
+    #[test]
+    fn hashuid_ascii_deterministic() {
+        let a = hashuid_ascii("MRN-12345", Some("pepper")).unwrap();
+        let b = hashuid_ascii("MRN-12345", Some("pepper")).unwrap();
+        assert_eq!(a, b, "same input and salt should produce same output");
+    }
+
+    /// Requirement r-3-6-2
+    #[test]
+    fn hashuid_ascii_different_inputs_different_outputs() {
+        let a = hashuid_ascii("MRN-12345", Some("pepper")).unwrap();
+        let b = hashuid_ascii("MRN-12346", Some("pepper")).unwrap();
+        assert_ne!(a, b, "different inputs should produce different outputs");
+    }
+
+    /// Requirement r-3-6-2
+    #[test]
+    fn hashuid_ascii_salt_changes_output() {
+        let unsalted = hashuid_ascii("MRN-12345", None).unwrap();
+        let salted = hashuid_ascii("MRN-12345", Some("pepper")).unwrap();
+        assert_ne!(unsalted, salted, "salt should change the output");
+        let other = hashuid_ascii("MRN-12345", Some("other")).unwrap();
+        assert_ne!(
+            salted, other,
+            "different salts should produce different outputs"
+        );
+    }
+
+    /// Requirement r-3-6-2
+    ///
+    /// An empty salt string is the same as no salt at all, matching the
+    /// Python implementation called with `salt=""`.
+    #[test]
+    fn hashuid_ascii_empty_salt_equals_no_salt() {
+        assert_eq!(
+            hashuid_ascii("1.2.3.4.5", None).unwrap(),
+            hashuid_ascii("1.2.3.4.5", Some("")).unwrap()
+        );
+    }
+
+    /// Requirement r-3-6-2
+    #[test]
+    fn hashuid_ascii_output_is_24_lowercase_base32_chars() {
+        for input in ["MRN-12345", "", "1.2.3.4.5", "Ünïcödé-42"] {
+            let hash = hashuid_ascii(input, Some("pepper")).unwrap();
+            assert_eq!(
+                hash.len(),
+                24,
+                "120 bits of digest encode to exactly 24 base32 characters, got {}",
+                hash
+            );
+            assert!(
+                hash.chars()
+                    .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c)),
+                "output should only use the lowercase base32 alphabet, got: {}",
+                hash
+            );
+        }
+    }
+
+    /// Requirement r-3-6-2
+    ///
+    /// Known-answer vectors generated with the companion Python
+    /// implementation:
+    ///
+    /// ```python
+    /// digest = hashlib.sha256(f"{salt}{value}".encode("utf-8")).digest()
+    /// return base64.b32encode(digest[:15]).decode("ascii").rstrip("=").lower()
+    /// ```
+    #[test]
+    fn hashuid_ascii_matches_python_reference_implementation() {
+        // (salt, input, expected output from Python)
+        let vectors = [
+            (Some("pepper"), "MRN-12345", "whhxlihfvtbjnp7vwhviagcq"),
+            (
+                Some("my-secret-salt"),
+                "ACC-987654",
+                "hobjqhrb5okyp6kieagaoml3",
+            ),
+            (Some("pepper"), "", "rs546kozz34jm5of6xa5z7uc"),
+            // Python with an empty salt string equals unsalted Rust output
+            (None, "1.2.3.4.5", "xc47e3ankhswxcjpr3g4mgli"),
+            (Some(""), "1.2.3.4.5", "xc47e3ankhswxcjpr3g4mgli"),
+            // Non-ASCII input is hashed as UTF-8 bytes
+            (Some("pepper"), "Ünïcödé-42", "vk53ndbj54u5esa3knxvufar"),
+        ];
+        for (salt, input, expected) in vectors {
+            let hash = hashuid_ascii(input, salt).unwrap();
+            assert_eq!(
+                hash, expected,
+                "mismatch with Python output for salt {:?}, input {:?}",
+                salt, input
+            );
+        }
+    }
+
+    /// Vectors from RFC 4648 section 10, lowercased and unpadded.
+    #[test]
+    fn base32_encode_lower_unpadded_matches_rfc4648() {
+        let vectors = [
+            ("", ""),
+            ("f", "my"),
+            ("fo", "mzxq"),
+            ("foo", "mzxw6"),
+            ("foob", "mzxw6yq"),
+            ("fooba", "mzxw6ytb"),
+            ("foobar", "mzxw6ytboi"),
+        ];
+        for (input, expected) in vectors {
+            assert_eq!(
+                base32_encode_lower_unpadded(input.as_bytes()),
+                expected,
+                "mismatch for input {:?}",
+                input
+            );
+        }
+    }
+
     #[test]
     fn default_functions_contains_hashuid() {
         let funcs = default_functions(None);
@@ -196,6 +375,32 @@ mod tests {
         assert_eq!(
             salted, salted_again,
             "salted hashuid should be deterministic"
+        );
+    }
+
+    /// Requirement r-3-6-2
+    #[test]
+    fn default_functions_contains_hashuid_ascii() {
+        let funcs = default_functions(None);
+        assert!(funcs.contains_key("hashuid_ascii"));
+        assert_eq!(
+            funcs["hashuid_ascii"]("1.2.3.4.5").unwrap(),
+            hashuid_ascii("1.2.3.4.5", None).unwrap()
+        );
+    }
+
+    /// Requirement r-3-6-2
+    #[test]
+    fn default_functions_hashuid_ascii_uses_salt() {
+        let unsalted = default_functions(None)["hashuid_ascii"]("MRN-12345").unwrap();
+        let salted = default_functions(Some("pepper"))["hashuid_ascii"]("MRN-12345").unwrap();
+        assert_ne!(
+            unsalted, salted,
+            "registered hashuid_ascii should apply the salt"
+        );
+        assert_eq!(
+            salted, "whhxlihfvtbjnp7vwhviagcq",
+            "registered hashuid_ascii should match the Python reference"
         );
     }
 
