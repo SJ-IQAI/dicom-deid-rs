@@ -40,10 +40,10 @@ project.
 ## Usage
 
 ```
-dicom-deid-rs <input_dir> <output_dir> <recipe_file> [--var NAME VALUE]... [--salt VALUE]
+dicom-deid-rs <input_dir> <output_dir> <recipe_file> [OPTIONS]
 ```
 
-The tool recursively finds all `.dcm` files in `input_dir`, applies the recipe, and writes de-identified files to `output_dir`, preserving the directory structure.
+The tool recursively finds all `.dcm` files in `input_dir`, applies the recipe, and writes de-identified files to `output_dir`, preserving the directory structure by default.
 
 ```
 dicom-deid-rs ./input ./output recipe.txt \
@@ -59,6 +59,61 @@ as `REPLACE PatientID func:hashuid` cannot be reversed by hashing candidate
 inputs without the salt. Use the same salt across runs of a dataset to keep
 hashed UIDs and IDs consistent; without `--salt`, output is plain (unsalted)
 SHA-256, equivalent to an empty salt.
+
+### De-identified output paths
+
+Archives are conventionally laid out as
+`<PatientID>/<StudyInstanceUID>/<SeriesInstanceUID>_<SeriesNumber>/<SOPInstanceUID>.dcm`,
+so mirroring the input tree writes the original identifiers back into the
+output as directory names — undoing the header work. `--deid-paths` names
+output files from the *de-identified* values instead:
+
+```
+dicom-deid-rs ./input ./output recipe.txt \
+  --salt "my-secret-salt" \
+  --deid-paths \
+  --mapping-file ./keys/mapping.tsv
+```
+
+```
+input/MRN0012345/1.2.840.10.1/1.2.840.10.2_3/1.2.840.10.100.dcm
+  ->
+output/opcithikdfafnuugqkri27k2/2.25.2424779984772269505.../2.25.5448186484113305683..._3/2.25.8137828201831992686....dcm
+```
+
+The hierarchy is preserved: instances of a series still share a series
+directory, and studies of a patient still share a patient directory. Values
+are read from the data set *after* de-identification, so each path component
+equals the value stored in the file.
+
+`--output-layout TEMPLATE` takes a custom `/`-separated template whose
+`{Token}` placeholders name DICOM tags by keyword, `(gggg,eeee)`, or bare
+hex; `--deid-paths` is shorthand for the layout above. Unknown or malformed
+templates fail before any file is processed.
+
+Notes on using a layout:
+
+- The paths are only PHI-free if the recipe actually de-identifies the tags
+  the layout reads. Each layout tag no recipe action changes produces a
+  startup warning.
+- A file missing one of the layout tags is reported and counted as skipped;
+  the run continues.
+- Two inputs that render to the same path do not overwrite each other — the
+  second is counted as skipped. This is the usual signal that a recipe blanks
+  or removes an identifier the layout depends on.
+- `--mapping-file` records `original_path <TAB> deidentified_path` for every
+  written file. Hashing is one-way, so without it there is no way back from
+  output to input. **This file lists the original paths and is therefore
+  PHI**; it must sit outside `output_dir` (the tool refuses otherwise) and be
+  stored accordingly.
+- UID components run about 44 characters each, so a full de-identified path
+  is roughly 170 characters plus your output root — worth checking against
+  the 260-character `MAX_PATH` limit on Windows.
+
+The blacklist report (`blacklisted_files.txt`) is written to the current
+working directory, not to `output_dir`. Blacklisted files are never
+de-identified, so the report necessarily names input paths; keeping it out of
+the output directory is what lets that directory stay free of PHI.
 
 
 ## Recipe Format
@@ -162,6 +217,7 @@ input, so continuing would produce a whole run of suspect output.
 ## Library Usage
 
 ```rust
+use dicom_deid_rs::layout::DEID_PATH_LAYOUT;
 use dicom_deid_rs::pipeline::{DeidConfig, DeidPipeline};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -175,6 +231,11 @@ let config = DeidConfig {
     ]),
     functions: HashMap::new(), // hashuid is built-in
     salt: Some("my-secret-salt".into()), // or None for unsalted hashuid
+    // None mirrors the input tree; a template names outputs from
+    // de-identified values. Any {Tag} template is accepted.
+    output_layout: Some(DEID_PATH_LAYOUT.into()),
+    // PHI: must be outside output_dir.
+    mapping_file: Some(PathBuf::from("./keys/mapping.tsv")),
 };
 
 let pipeline = DeidPipeline::new(config).unwrap();

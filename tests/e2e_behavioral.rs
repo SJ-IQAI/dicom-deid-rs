@@ -230,6 +230,8 @@ REPLACE PatientName ANON
         variables: HashMap::new(),
         functions: HashMap::new(),
         salt: None,
+        output_layout: None,
+        mapping_file: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -308,6 +310,8 @@ fn pipeline_multiple_files_nested_dirs() {
         variables: HashMap::new(),
         functions: HashMap::new(),
         salt: None,
+        output_layout: None,
+        mapping_file: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -447,6 +451,8 @@ REPLACE PatientName ANON
         variables: HashMap::new(),
         functions: HashMap::new(),
         salt: None,
+        output_layout: None,
+        mapping_file: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -772,6 +778,8 @@ REPLACE PatientName ANON
         variables: HashMap::new(),
         functions: HashMap::new(),
         salt: None,
+        output_layout: None,
+        mapping_file: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -780,11 +788,26 @@ REPLACE PatientName ANON
     assert_eq!(report.files_processed, 1);
     assert_eq!(report.files_blacklisted, 2);
 
-    // Verify blacklist report file was written
-    let report_path = output_dir.join("blacklisted_files.txt");
+    // r-1-11: the report names input files, which are PHI, so it goes
+    // to the working directory rather than into the output tree.
+    let report_path = report
+        .blacklist_report_path
+        .clone()
+        .expect("report path should be reported");
     assert!(report_path.exists(), "blacklisted_files.txt should exist");
+    assert_eq!(
+        report_path,
+        std::env::current_dir()
+            .expect("cwd")
+            .join("blacklisted_files.txt")
+    );
+    assert!(
+        !output_dir.join("blacklisted_files.txt").exists(),
+        "the output directory must stay free of input file names"
+    );
 
     let content = fs::read_to_string(&report_path).expect("read report");
+    let _ = fs::remove_file(&report_path);
     let lines: Vec<&str> = content.trim().lines().collect();
     assert_eq!(lines.len(), 2, "should have 2 blacklisted entries");
 
@@ -835,6 +858,8 @@ fn pipeline_no_blacklist_no_report_file() {
         variables: HashMap::new(),
         functions: HashMap::new(),
         salt: None,
+        output_layout: None,
+        mapping_file: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");
@@ -843,9 +868,12 @@ fn pipeline_no_blacklist_no_report_file() {
     assert_eq!(report.files_blacklisted, 0);
 
     // No blacklist report should be created when no files are blacklisted
-    let report_path = output_dir.join("blacklisted_files.txt");
     assert!(
-        !report_path.exists(),
+        report.blacklist_report_path.is_none(),
+        "no report should be written when no files are blacklisted"
+    );
+    assert!(
+        !output_dir.join("blacklisted_files.txt").exists(),
         "blacklisted_files.txt should NOT exist when no files are blacklisted"
     );
 }
@@ -880,6 +908,8 @@ fn pipeline_salt_applied_to_hashuid_patient_id() {
             variables: HashMap::new(),
             functions: HashMap::new(),
             salt: salt.map(str::to_string),
+            output_layout: None,
+            mapping_file: None,
         };
         let pipeline = DeidPipeline::new(config).expect("should create pipeline");
         pipeline.run().expect("should run pipeline");
@@ -970,6 +1000,8 @@ fn pipeline_file_meta_carries_no_original_sop_instance_uid() {
         variables,
         functions: HashMap::new(),
         salt: None,
+        output_layout: None,
+        mapping_file: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");

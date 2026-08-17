@@ -53,6 +53,8 @@ fn run_pipeline_on_fixture(
         variables,
         functions: HashMap::new(),
         salt: None,
+        output_layout: None,
+        mapping_file: None,
     };
 
     let pipeline = DeidPipeline::new(config).expect("should create pipeline");

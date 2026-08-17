@@ -26,6 +26,17 @@ pub enum DeidError {
     #[error("Function not found: {0}")]
     FunctionNotFound(String),
 
+    /// An output path could not be built from the de-identified data set
+    /// (r-1-6, r-1-7, r-1-8). Non-fatal: the file is counted as skipped.
+    #[error("Output layout error: {0}")]
+    Layout(String),
+
+    /// Two input files rendered to the same output path (r-1-9).
+    /// Non-fatal: the later file is counted as skipped so the earlier
+    /// one is never silently overwritten.
+    #[error("Output path collision: {0}")]
+    PathCollision(String),
+
     /// The File Meta Information group cannot be brought into a
     /// de-identified, self-consistent state.
     ///
