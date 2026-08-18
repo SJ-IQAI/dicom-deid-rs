@@ -162,17 +162,54 @@ struct DispatchKeys {
     modality_keys: Vec<String>,
     /// Index of the modality condition within the label's conditions.
     modality_condition_index: Option<usize>,
+    /// Whether the dispatch lookup fully decides the modality condition,
+    /// letting evaluation skip it. See [`dispatch_is_equivalent`].
+    modality_skippable: bool,
     /// Lowercased manufacturer values (from contains/equals Manufacturer).
     manufacturer_keys: Vec<String>,
     /// Index of the manufacturer condition within the label's conditions.
     manufacturer_condition_index: Option<usize>,
+    /// Whether the dispatch lookup fully decides the manufacturer condition.
+    manufacturer_skippable: bool,
+}
+
+/// Whether the dispatch tree's substring test is equivalent to actually
+/// evaluating this predicate, and so may stand in for it.
+///
+/// [`dispatch_candidates`] selects buckets with `field_value.contains(key)`,
+/// using the recipe's raw value as the key. That is only the same thing as
+/// evaluating the predicate when:
+///
+/// - the predicate is `Contains`, which is evaluated as a case-insensitive
+///   *regex* — so the value must be a plain literal. A value carrying regex
+///   metacharacters (`^GE MEDICAL`) would be looked up as the literal text
+///   `^ge medical`, which no real value contains, silently disabling the
+///   label. Pipe alternation is fine, since the keys are split on `|`
+///   (r-2-7-4) and each part is checked separately.
+///
+/// `Equals` is deliberately excluded: it is evaluated as full string
+/// equality, so a substring hit is weaker than the predicate. Such a
+/// condition may still narrow dispatch — equality implies containment, so
+/// no true match is ever filtered out — but it must still be evaluated,
+/// or `equals Manufacturer GE` would match `GE MEDICAL SYSTEMS`.
+fn dispatch_is_equivalent(predicate: &Predicate) -> bool {
+    match predicate {
+        Predicate::Contains { value, .. } => !value.split('|').any(|part| {
+            part.trim().contains([
+                '\\', '^', '$', '.', '[', ']', '(', ')', '*', '+', '?', '{', '}',
+            ])
+        }),
+        _ => false,
+    }
 }
 
 fn extract_dispatch_keys(label: &FilterLabel) -> DispatchKeys {
     let mut modality_keys = Vec::new();
     let mut modality_condition_index = None;
+    let mut modality_skippable = false;
     let mut manufacturer_keys = Vec::new();
     let mut manufacturer_condition_index = None;
+    let mut manufacturer_skippable = false;
 
     for (i, condition) in label.conditions.iter().enumerate() {
         // Only extract from AND-chained conditions (First or And).
@@ -185,8 +222,20 @@ fn extract_dispatch_keys(label: &FilterLabel) -> DispatchKeys {
         match &condition.predicate {
             Predicate::Contains { field, value } | Predicate::Equals { field, value } => {
                 let field_lower = field.to_lowercase();
+                // A Contains value that is not a plain literal cannot be
+                // used as a dispatch key at all: the tree matches keys as
+                // substrings, so a regex would never be found and the
+                // label would silently never fire. Leave it unindexed and
+                // let it fall into the catch-all bucket instead.
+                let equivalent = dispatch_is_equivalent(&condition.predicate);
+                let indexable =
+                    equivalent || matches!(condition.predicate, Predicate::Equals { .. });
+                if !indexable {
+                    continue;
+                }
                 if field_lower == "modality" && modality_condition_index.is_none() {
                     modality_condition_index = Some(i);
+                    modality_skippable = equivalent;
                     // Split on pipe for alternation (e.g. "CT|MR")
                     for part in value.split('|') {
                         let trimmed = part.trim().to_lowercase();
@@ -196,6 +245,7 @@ fn extract_dispatch_keys(label: &FilterLabel) -> DispatchKeys {
                     }
                 } else if field_lower == "manufacturer" && manufacturer_condition_index.is_none() {
                     manufacturer_condition_index = Some(i);
+                    manufacturer_skippable = equivalent;
                     for part in value.split('|') {
                         let trimmed = part.trim().to_lowercase();
                         if !trimmed.is_empty() {
@@ -211,8 +261,10 @@ fn extract_dispatch_keys(label: &FilterLabel) -> DispatchKeys {
     DispatchKeys {
         modality_keys,
         modality_condition_index,
+        modality_skippable,
         manufacturer_keys,
         manufacturer_condition_index,
+        manufacturer_skippable,
     }
 }
 
@@ -226,12 +278,18 @@ fn build_dispatch_tree(labels: Vec<&FilterLabel>) -> ModalityDispatchTree {
     for label in labels {
         let keys = extract_dispatch_keys(label);
 
-        // Build skip_indices from the dispatch keys
+        // Build skip_indices from the dispatch keys. Only conditions the
+        // dispatch lookup fully decides may be skipped; one that merely
+        // narrows the candidate set still has to be evaluated.
         let mut skip_indices = Vec::new();
-        if let Some(idx) = keys.modality_condition_index {
+        if let Some(idx) = keys.modality_condition_index
+            && keys.modality_skippable
+        {
             skip_indices.push(idx);
         }
-        if let Some(idx) = keys.manufacturer_condition_index {
+        if let Some(idx) = keys.manufacturer_condition_index
+            && keys.manufacturer_skippable
+        {
             skip_indices.push(idx);
         }
 
@@ -895,5 +953,149 @@ mod tests {
         let regions = index.get_graylist_regions(&obj);
         // No conditions → result starts false, stays false
         assert!(regions.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // r-2-6-8: the dispatch index must not change predicate semantics
+    // -----------------------------------------------------------------------
+
+    /// Build a single-label graylist recipe with one condition.
+    fn graylist_with(predicate: Predicate) -> Recipe {
+        Recipe {
+            format: "dicom".into(),
+            header: vec![],
+            filters: vec![FilterSection {
+                filter_type: FilterType::Graylist,
+                labels: vec![FilterLabel {
+                    name: "T".into(),
+                    conditions: vec![Condition {
+                        operator: LogicalOp::First,
+                        predicate,
+                    }],
+                    coordinates: vec![CoordinateRegion {
+                        xmin: 0,
+                        ymin: 0,
+                        xmax: 10,
+                        ymax: 10,
+                        keep: false,
+                    }],
+                }],
+            }],
+        }
+    }
+
+    fn ge_pt_object() -> InMemDicomObject {
+        let mut obj = create_test_obj();
+        put_str(&mut obj, tags::MANUFACTURER, VR::LO, "GE MEDICAL SYSTEMS");
+        put_str(&mut obj, tags::MODALITY, VR::CS, "PT");
+        put_str(
+            &mut obj,
+            tags::MANUFACTURER_MODEL_NAME,
+            VR::LO,
+            "SIGNA PET/MR",
+        );
+        obj
+    }
+
+    fn fires(predicate: Predicate) -> bool {
+        let recipe = graylist_with(predicate);
+        !FilterIndex::new(&recipe)
+            .get_graylist_regions(&ge_pt_object())
+            .is_empty()
+    }
+
+    fn contains(field: &str, value: &str) -> Predicate {
+        Predicate::Contains {
+            field: field.into(),
+            value: value.into(),
+        }
+    }
+
+    fn equals(field: &str, value: &str) -> Predicate {
+        Predicate::Equals {
+            field: field.into(),
+            value: value.into(),
+        }
+    }
+
+    /// Requirement r-2-6-8: `contains` is a regex (r-2-6-1), and that must
+    /// hold on Modality and Manufacturer too, even though the dispatch
+    /// tree buckets labels by those two fields using literal substrings.
+    #[test]
+    fn r2_6_8_regex_contains_works_on_dispatch_indexed_fields() {
+        assert!(
+            fires(contains("Manufacturer", "^GE MEDICAL")),
+            "an anchored regex on Manufacturer must still match"
+        );
+        assert!(
+            fires(contains("Modality", "^PT$")),
+            "an anchored regex on Modality must still match"
+        );
+        assert!(
+            fires(contains("ManufacturerModelName", "^SIGNA")),
+            "control: the same anchor on a non-indexed field"
+        );
+        assert!(
+            !fires(contains("Manufacturer", "^XX")),
+            "an anchored regex that does not match must not fire"
+        );
+    }
+
+    /// Requirement r-2-6-8: `equals` is exact (r-2-6-3). The dispatch tree
+    /// matches keys as substrings, so an indexed `equals` condition must
+    /// still be evaluated rather than treated as satisfied.
+    #[test]
+    fn r2_6_8_equals_stays_exact_on_dispatch_indexed_fields() {
+        assert!(
+            !fires(equals("Manufacturer", "GE")),
+            "equals must not degrade to a substring match"
+        );
+        assert!(
+            !fires(equals("Modality", "P")),
+            "equals must not degrade to a substring match"
+        );
+        assert!(
+            !fires(equals("ManufacturerModelName", "SIGNA")),
+            "control: the same test on a non-indexed field"
+        );
+        assert!(fires(equals("Manufacturer", "GE MEDICAL SYSTEMS")));
+        assert!(fires(equals("Modality", "PT")));
+    }
+
+    /// Requirement r-2-6-8 with r-2-7-4: pipe alternation still dispatches,
+    /// since the keys are split on `|` before being used.
+    #[test]
+    fn r2_6_8_pipe_alternation_still_dispatches() {
+        assert!(fires(contains("Modality", "PT|CT")));
+        assert!(fires(contains("Manufacturer", "SIEMENS|GE MEDICAL")));
+        assert!(!fires(contains("Modality", "MR|US")));
+    }
+
+    /// Requirement r-2-6-8: indexed and unindexed evaluation must agree.
+    #[test]
+    fn r2_6_8_index_agrees_with_direct_evaluation() {
+        let obj = ge_pt_object();
+        for predicate in [
+            contains("Manufacturer", "^GE MEDICAL"),
+            contains("Manufacturer", "GE MEDICAL"),
+            contains("Manufacturer", "^XX"),
+            contains("Modality", "^PT$"),
+            contains("Modality", "PT|CT"),
+            equals("Manufacturer", "GE"),
+            equals("Manufacturer", "GE MEDICAL SYSTEMS"),
+            equals("Modality", "P"),
+            equals("Modality", "PT"),
+        ] {
+            let recipe = graylist_with(predicate.clone());
+            let indexed = !FilterIndex::new(&recipe)
+                .get_graylist_regions(&obj)
+                .is_empty();
+            let direct = crate::filter::matches_label(&recipe.filters[0].labels[0], &obj);
+            assert_eq!(
+                indexed, direct,
+                "index and direct evaluation disagree for {:?}",
+                predicate
+            );
+        }
     }
 }
