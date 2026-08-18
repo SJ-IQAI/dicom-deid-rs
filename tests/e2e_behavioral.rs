@@ -32,6 +32,14 @@ fn put_str(obj: &mut InMemDicomObject, tag: Tag, vr: VR, value: &str) {
     ));
 }
 
+fn put_u16(obj: &mut InMemDicomObject, tag: Tag, value: u16) {
+    obj.put(DataElement::new(
+        tag,
+        VR::US,
+        Value::Primitive(PrimitiveValue::from(value)),
+    ));
+}
+
 fn create_test_file_obj() -> FileDicomObject<InMemDicomObject> {
     let mut obj = FileDicomObject::new_empty_with_meta(
         FileMetaTableBuilder::new()
@@ -1055,5 +1063,151 @@ fn pipeline_file_meta_carries_no_original_sop_instance_uid() {
         !bytes.windows(needle.len()).any(|w| w == needle),
         "original SOP Instance UID {} still present in the output file",
         ORIGINAL_UID
+    );
+}
+
+// ---------------------------------------------------------------------------
+// r-3-4-4: repeating-group wildcard removal (overlays and curves)
+// ---------------------------------------------------------------------------
+
+/// Requirement r-3-4-4: a full pipeline run strips every overlay and
+/// curve plane while leaving the Image Pixel module intact.
+///
+/// This is the case that matters in practice: overlay planes are a
+/// classic hiding place for burned-in annotation, and `OverlayRows` /
+/// `OverlayColumns` share element numbers 0010/0011 with the image's own
+/// `Rows` / `Columns`, so a group-blind rule would destroy the image
+/// geometry.
+#[test]
+fn r3_4_4_wildcard_removes_overlays_and_curves_end_to_end() {
+    let tmp = TempDir::new().expect("should create temp dir");
+    let input_dir = tmp.path().join("input");
+    let output_dir = tmp.path().join("output");
+    fs::create_dir_all(&input_dir).expect("create input dir");
+
+    let mut obj = create_test_file_obj();
+    put_str(&mut obj, tags::SOP_INSTANCE_UID, VR::UI, "1.2.3.4.5");
+    put_str(&mut obj, tags::MODALITY, VR::CS, "CT");
+
+    // Overlay planes across low, mid and high group numbers.
+    for group in [0x6000u16, 0x6002, 0x601E, 0x6080, 0x60FE] {
+        put_str(&mut obj, Tag(group, 0x3000), VR::OW, "burned-in annotation");
+        put_str(&mut obj, Tag(group, 0x0022), VR::LO, "Referred by Dr Smith");
+        put_u16(&mut obj, Tag(group, 0x0010), 512); // OverlayRows
+        put_str(&mut obj, Tag(group, 0x1301), VR::IS, "42"); // ROIArea
+    }
+    // Curve groups, including the audio elements they can carry.
+    for group in [0x5000u16, 0x5002, 0x50FE] {
+        put_str(&mut obj, Tag(group, 0x3000), VR::OW, "curve-data");
+        put_str(&mut obj, Tag(group, 0x200C), VR::OW, "dictated-audio");
+    }
+
+    // Must survive: image geometry and technical parameters.
+    put_u16(&mut obj, tags::ROWS, 512);
+    put_u16(&mut obj, tags::COLUMNS, 512);
+    put_str(&mut obj, tags::PIXEL_SPACING, VR::DS, "0.5\\0.5");
+    put_u16(&mut obj, tags::BITS_ALLOCATED, 16);
+    put_str(&mut obj, tags::SLICE_THICKNESS, VR::DS, "1.0");
+
+    obj.write_to_file(input_dir.join("ct.dcm"))
+        .expect("write input file");
+
+    let recipe = "\
+FORMAT dicom
+%header
+REMOVE (60xx,xxxx)
+REMOVE (50xx,xxxx)
+REPLACE SOPInstanceUID func:hashuid
+";
+    let config = DeidConfig {
+        input_dir,
+        output_dir: output_dir.clone(),
+        recipe_path: std::path::PathBuf::new(),
+        variables: HashMap::new(),
+        functions: HashMap::new(),
+        salt: None,
+        output_layout: None,
+        mapping_file: None,
+    };
+    let pipeline = DeidPipeline::from_recipe_text(recipe, config).expect("should create pipeline");
+    let report = pipeline
+        .run_with_progress(|_, _, _| {})
+        .expect("should run pipeline");
+    assert_eq!(report.files_processed, 1);
+
+    let result = open_file(output_dir.join("ct.dcm")).expect("should open output");
+
+    // Every overlay and curve element is gone.
+    for group in [0x6000u16, 0x6002, 0x601E, 0x6080, 0x60FE] {
+        for elem in [0x3000u16, 0x0022, 0x0010, 0x1301] {
+            assert!(
+                result.element(Tag(group, elem)).is_err(),
+                "({:04X},{:04X}) should have been removed",
+                group,
+                elem
+            );
+        }
+    }
+    for group in [0x5000u16, 0x5002, 0x50FE] {
+        for elem in [0x3000u16, 0x200C] {
+            assert!(
+                result.element(Tag(group, elem)).is_err(),
+                "({:04X},{:04X}) should have been removed",
+                group,
+                elem
+            );
+        }
+    }
+
+    // The Image Pixel module is untouched — in particular Rows and
+    // Columns, which share element numbers with the overlay equivalents.
+    let value_of = |tag| {
+        result
+            .element(tag)
+            .unwrap_or_else(|_| panic!("{:?} should survive", tag))
+            .value()
+            .to_str()
+            .expect("readable")
+            .trim()
+            .to_string()
+    };
+    assert_eq!(value_of(tags::ROWS), "512");
+    assert_eq!(value_of(tags::COLUMNS), "512");
+    assert_eq!(value_of(tags::PIXEL_SPACING), "0.5\\0.5");
+    assert_eq!(value_of(tags::BITS_ALLOCATED), "16");
+    assert_eq!(value_of(tags::SLICE_THICKNESS), "1.0");
+    assert_eq!(value_of(tags::MODALITY), "CT");
+}
+
+/// Requirement r-3-4-4 with r-3-11: an explicit KEEP outranks a wildcard
+/// REMOVE, so a single plane can be protected from a blanket rule.
+#[test]
+fn r3_4_4_explicit_keep_outranks_wildcard_remove() {
+    let mut obj = create_test_obj();
+    put_str(&mut obj, Tag(0x6000, 0x3000), VR::OW, "overlay-a");
+    put_str(&mut obj, Tag(0x6002, 0x3000), VR::OW, "overlay-b");
+    put_str(&mut obj, Tag(0x6000, 0x1301), VR::IS, "42");
+
+    let recipe = Recipe::parse("FORMAT dicom\n%header\nREMOVE (60xx,xxxx)\nKEEP (6000,1301)\n")
+        .expect("should parse");
+    apply_header_actions(
+        &recipe.header,
+        &HashMap::new(),
+        &HashMap::<String, DeidFunction>::new(),
+        &mut obj,
+    )
+    .expect("should apply");
+
+    assert!(
+        obj.element(Tag(0x6000, 0x3000)).is_err(),
+        "wildcard removes"
+    );
+    assert!(
+        obj.element(Tag(0x6002, 0x3000)).is_err(),
+        "wildcard removes"
+    );
+    assert!(
+        obj.element(Tag(0x6000, 0x1301)).is_ok(),
+        "explicit KEEP must outrank the wildcard REMOVE (r-3-11)"
     );
 }

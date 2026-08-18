@@ -6,7 +6,6 @@ use crate::metadata;
 use crate::metadata::DeidFunction;
 use crate::pixel;
 use crate::recipe::{ActionType, Recipe, TagSpecifier};
-use crate::tag::resolve_tags;
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
 use dicom_core::{Tag, VR};
 use dicom_dictionary_std::StandardDataDictionary;
@@ -549,18 +548,7 @@ fn warn_on_unprotected_layout_tags(layout: &OutputLayout, recipe: &Recipe) {
 /// The layout tags no recipe action de-identifies. See
 /// [`warn_on_unprotected_layout_tags`] for why this is a warning.
 fn unprotected_layout_tags(layout: &OutputLayout, recipe: &Recipe) -> Vec<Tag> {
-    // Pattern specifiers need a data set to resolve, so their coverage
-    // cannot be decided here. If any are present, stay quiet rather than
-    // cry wolf.
-    let has_pattern = recipe
-        .header
-        .iter()
-        .any(|a| matches!(a.tag, TagSpecifier::Pattern(_)));
-    if has_pattern {
-        return Vec::new();
-    }
-
-    let deidentified: HashSet<Tag> = recipe
+    let deidentifying: Vec<&TagSpecifier> = recipe
         .header
         .iter()
         .filter(|a| {
@@ -571,15 +559,21 @@ fn unprotected_layout_tags(layout: &OutputLayout, recipe: &Recipe) -> Vec<Tag> {
                 ActionType::Replace | ActionType::Jitter | ActionType::Blank | ActionType::Remove
             )
         })
-        .filter_map(|a| resolve_tags(&a.tag, &dicom_object::InMemDicomObject::new_empty()).ok())
-        .flatten()
+        .map(|a| &a.tag)
         .collect();
 
     let dict = StandardDataDictionary;
     layout
         .tags()
         .into_iter()
-        .filter(|tag| !deidentified.contains(tag))
+        .filter(|tag| {
+            // A specifier that needs the data set to resolve might well
+            // cover this tag; stay quiet rather than cry wolf.
+            if deidentifying.iter().any(|s| s.matches(*tag).is_none()) {
+                return false;
+            }
+            !deidentifying.iter().any(|s| s.matches(*tag) == Some(true))
+        })
         .filter(|tag| {
             // A numeric VR cannot carry a name, an identifier, or a
             // date, so leaving it alone is not a PHI leak. SeriesNumber

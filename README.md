@@ -188,6 +188,51 @@ Precedence when multiple actions target the same tag: KEEP > ADD > REPLACE > JIT
 - Keyword: `PatientName`
 - Bare hex: `00120063`
 - Parenthesized: `(0008,0050)`
+- Wildcard: `(60xx,xxxx)` or `60xxxxxx` — each `x` matches any nibble
+
+Prefer a tag number over a keyword when transcribing from another tool's
+config. Keywords are resolved against the DICOM dictionary, and an
+unrecognised one fails at runtime rather than at parse time, which shows up
+as every file being skipped.
+
+### Repeating groups
+
+The `x` wildcard is the notation DICOM PS3.6 and CTP use for repeating
+groups. Its main use is removing overlay and curve planes, which CTP handles
+with its `<r t="overlays">` and `<r t="curves">` directives:
+
+```
+REMOVE (60xx,xxxx)   # all overlay groups, 6000-60FF
+REMOVE (50xx,xxxx)   # all curve groups, 5000-50FF
+```
+
+This matters for de-identification because overlay planes are a common
+hiding place for burned-in annotation, and curve groups can carry audio.
+Wildcards resolve against the tags a file actually carries, so absent groups
+cost nothing.
+
+Matching is on the whole tag, so `(60xx,xxxx)` does **not** touch the Image
+Pixel module — `(0028,0010)` Rows and `(0028,0011)` Columns are unaffected
+even though `OverlayRows`/`OverlayColumns` share their element numbers.
+
+A wildcard can also target one attribute across every plane:
+
+```
+REMOVE (60xx,3000)   # OverlayData only, all planes
+REMOVE (60xx,4000)   # OverlayComments only, all planes
+```
+
+Note that removing an overlay group does not clear overlays *embedded* in
+the high bits of PixelData (the retired mechanism signalled by
+`OverlayBitPosition`); that is pixel-side work.
+
+Since `KEEP` outranks `REMOVE` (r-3-11), an explicit `KEEP` protects
+individual tags from a blanket wildcard rule:
+
+```
+REMOVE (60xx,xxxx)
+KEEP (6000,1301)     # but retain this ROI measurement
+```
 
 ## File Meta Information
 

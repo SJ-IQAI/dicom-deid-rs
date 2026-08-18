@@ -1,5 +1,7 @@
 use crate::error::DeidError;
 use dicom_core::Tag;
+use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
+use dicom_dictionary_std::StandardDataDictionary;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -96,11 +98,55 @@ pub enum TagSpecifier {
     Keyword(String),
     TagValue(Tag),
     Pattern(String),
+    /// A tag written with `x` wildcard nibbles, e.g. `(60xx,xxxx)`, the
+    /// notation DICOM PS3.6 and CTP use for repeating groups such as
+    /// overlays (`6000-60FF`) and curves (`5000-50FF`).
+    ///
+    /// Each field is a `(value, mask)` pair: a tag matches when
+    /// `tag.group & group.1 == group.0` and likewise for the element.
+    /// See [`TagSpecifier::matches`].
+    Wildcard {
+        group: (u16, u16),
+        element: (u16, u16),
+    },
     PrivateTag {
         group: u16,
         creator: String,
         element_offset: u8,
     },
+}
+
+impl TagSpecifier {
+    /// Whether a concrete tag is covered by this specifier, when that can
+    /// be decided without inspecting a data set.
+    ///
+    /// Returns `None` for [`TagSpecifier::Pattern`] and
+    /// [`TagSpecifier::PrivateTag`], which need the data set to resolve.
+    pub fn matches(&self, tag: Tag) -> Option<bool> {
+        match self {
+            TagSpecifier::TagValue(t) => Some(*t == tag),
+            TagSpecifier::Wildcard { group, element } => {
+                Some(tag.0 & group.1 == group.0 && tag.1 & element.1 == element.0)
+            }
+            TagSpecifier::Keyword(name) => Some(
+                StandardDataDictionary
+                    .by_name(name)
+                    .map(|e| e.tag() == tag)
+                    .unwrap_or(false),
+            ),
+            // A private creator has to be looked up in the data set, but
+            // the resolved tag always lands in the declared group, so a
+            // tag from any other group is definitively not covered.
+            TagSpecifier::PrivateTag { group, .. } => {
+                if tag.0 == *group {
+                    None
+                } else {
+                    Some(false)
+                }
+            }
+            TagSpecifier::Pattern(_) => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -547,22 +593,14 @@ fn parse_header_action(line: &str) -> Result<Option<HeaderAction>, DeidError> {
 
 fn parse_tag_specifier(s: &str) -> Result<TagSpecifier, DeidError> {
     if s.starts_with('(') && s.ends_with(')') {
-        // (GGGG,EEEE) format
+        // (GGGG,EEEE) format, optionally with `x` wildcard nibbles
         let inner = &s[1..s.len() - 1];
         let (group_str, elem_str) = inner
             .split_once(',')
             .ok_or_else(|| DeidError::RecipeParse(format!("invalid tag format: {}", s)))?;
-        let group = u16::from_str_radix(group_str.trim(), 16)
-            .map_err(|_| DeidError::RecipeParse(format!("invalid tag group: {}", group_str)))?;
-        let element = u16::from_str_radix(elem_str.trim(), 16)
-            .map_err(|_| DeidError::RecipeParse(format!("invalid tag element: {}", elem_str)))?;
-        Ok(TagSpecifier::TagValue(Tag(group, element)))
-    } else if s.len() == 8 && s.chars().all(|c| c.is_ascii_hexdigit()) {
-        let group = u16::from_str_radix(&s[0..4], 16)
-            .map_err(|_| DeidError::RecipeParse(format!("invalid tag group: {}", &s[0..4])))?;
-        let element = u16::from_str_radix(&s[4..8], 16)
-            .map_err(|_| DeidError::RecipeParse(format!("invalid tag element: {}", &s[4..8])))?;
-        Ok(TagSpecifier::TagValue(Tag(group, element)))
+        build_tag_specifier(group_str.trim(), elem_str.trim())
+    } else if s.len() == 8 && s.chars().all(is_hex_or_wildcard) {
+        build_tag_specifier(&s[0..4], &s[4..8])
     } else if s.contains('"') {
         // PrivateTag: "GGGG","Creator","EE"
         let parts: Vec<&str> = s.split(',').collect();
@@ -591,6 +629,51 @@ fn parse_tag_specifier(s: &str) -> Result<TagSpecifier, DeidError> {
     } else {
         Ok(TagSpecifier::Keyword(s.to_string()))
     }
+}
+
+/// A hex digit, or `x`/`X` standing for a wildcard nibble.
+fn is_hex_or_wildcard(c: char) -> bool {
+    c.is_ascii_hexdigit() || c == 'x' || c == 'X'
+}
+
+/// Parse a group and element field into a specifier.
+///
+/// Fields made only of hex digits give an exact [`TagSpecifier::TagValue`];
+/// any `x` nibble makes it a [`TagSpecifier::Wildcard`].
+fn build_tag_specifier(group_str: &str, elem_str: &str) -> Result<TagSpecifier, DeidError> {
+    let (group_val, group_mask) = parse_hex_field(group_str, "group")?;
+    let (elem_val, elem_mask) = parse_hex_field(elem_str, "element")?;
+    if group_mask == 0xFFFF && elem_mask == 0xFFFF {
+        Ok(TagSpecifier::TagValue(Tag(group_val, elem_val)))
+    } else {
+        Ok(TagSpecifier::Wildcard {
+            group: (group_val, group_mask),
+            element: (elem_val, elem_mask),
+        })
+    }
+}
+
+/// Parse a 4-character hex field that may use `x` as a wildcard nibble,
+/// returning `(value, mask)`. Wildcard nibbles contribute 0 to both, so a
+/// masked comparison ignores them.
+fn parse_hex_field(field: &str, what: &str) -> Result<(u16, u16), DeidError> {
+    if field.len() != 4 || !field.chars().all(is_hex_or_wildcard) {
+        return Err(DeidError::RecipeParse(format!(
+            "invalid tag {}: {} (expected 4 hex digits, with `x` for wildcard nibbles)",
+            what, field
+        )));
+    }
+    let mut value = 0u16;
+    let mut mask = 0u16;
+    for c in field.chars() {
+        value <<= 4;
+        mask <<= 4;
+        if c != 'x' && c != 'X' {
+            value |= c.to_digit(16).expect("checked hex digit") as u16;
+            mask |= 0xF;
+        }
+    }
+    Ok((value, mask))
 }
 
 fn parse_action_value(s: &str) -> Result<ActionValue, DeidError> {
@@ -1270,5 +1353,123 @@ missing Modality
 ";
         let recipe = Recipe::parse(input).expect("should parse");
         assert_eq!(recipe.filters[0].filter_type, FilterType::Blacklist);
+    }
+
+    // -- r-3-4-4 -------------------------------------------------------------
+
+    fn only_action(text: &str) -> HeaderAction {
+        let recipe = Recipe::parse(text).expect("should parse");
+        assert_eq!(recipe.header.len(), 1, "expected exactly one action");
+        recipe.header[0].clone()
+    }
+
+    /// Requirement r-3-4-4
+    #[test]
+    fn r3_4_4_parse_wildcard_group() {
+        let action = only_action("FORMAT dicom\n%header\nREMOVE (60xx,xxxx)\n");
+        assert_eq!(action.action_type, ActionType::Remove);
+        assert_eq!(
+            action.tag,
+            TagSpecifier::Wildcard {
+                group: (0x6000, 0xFF00),
+                element: (0x0000, 0x0000),
+            }
+        );
+    }
+
+    /// Requirement r-3-4-4: a fixed element with a wildcard group.
+    #[test]
+    fn r3_4_4_parse_wildcard_group_fixed_element() {
+        let action = only_action("FORMAT dicom\n%header\nREMOVE (60xx,3000)\n");
+        assert_eq!(
+            action.tag,
+            TagSpecifier::Wildcard {
+                group: (0x6000, 0xFF00),
+                element: (0x3000, 0xFFFF),
+            }
+        );
+    }
+
+    /// Requirement r-3-4-4: bare hex accepts wildcards too, so a typo
+    /// cannot silently fall through to a keyword.
+    #[test]
+    fn r3_4_4_parse_wildcard_bare_hex() {
+        assert_eq!(
+            only_action("FORMAT dicom\n%header\nREMOVE 60xxxxxx\n").tag,
+            TagSpecifier::Wildcard {
+                group: (0x6000, 0xFF00),
+                element: (0x0000, 0x0000),
+            }
+        );
+    }
+
+    /// Requirement r-3-4-4: with no `x`, parsing is unchanged.
+    #[test]
+    fn r3_4_4_no_wildcard_still_yields_exact_tag() {
+        for text in [
+            "FORMAT dicom\n%header\nREMOVE (0010,0020)\n",
+            "FORMAT dicom\n%header\nREMOVE 00100020\n",
+        ] {
+            assert_eq!(
+                only_action(text).tag,
+                TagSpecifier::TagValue(Tag(0x0010, 0x0020))
+            );
+        }
+    }
+
+    /// Requirement r-3-4-4: wildcards are case-insensitive and may sit
+    /// in any nibble position.
+    #[test]
+    fn r3_4_4_wildcard_nibble_positions() {
+        assert_eq!(
+            only_action("FORMAT dicom\n%header\nREMOVE (60XX,30x0)\n").tag,
+            TagSpecifier::Wildcard {
+                group: (0x6000, 0xFF00),
+                element: (0x3000, 0xFF0F),
+            }
+        );
+    }
+
+    /// Requirement r-3-4-4: a malformed field is a parse error, not a
+    /// silent fallthrough to a keyword.
+    #[test]
+    fn r3_4_4_malformed_wildcard_is_a_parse_error() {
+        for text in [
+            "FORMAT dicom\n%header\nREMOVE (60x,xxxx)\n",
+            "FORMAT dicom\n%header\nREMOVE (60xxx,xxxx)\n",
+            "FORMAT dicom\n%header\nREMOVE (60xz,xxxx)\n",
+        ] {
+            assert!(
+                Recipe::parse(text).is_err(),
+                "should reject: {}",
+                text.lines().last().unwrap()
+            );
+        }
+    }
+
+    /// Requirement r-3-4-4: `matches` decides coverage without a data set.
+    #[test]
+    fn r3_4_4_matches_decides_coverage() {
+        let overlays = TagSpecifier::Wildcard {
+            group: (0x6000, 0xFF00),
+            element: (0x0000, 0x0000),
+        };
+        assert_eq!(overlays.matches(Tag(0x6000, 0x3000)), Some(true));
+        assert_eq!(overlays.matches(Tag(0x60FE, 0x0022)), Some(true));
+        // The image Rows tag shares element 0010 with OverlayRows.
+        assert_eq!(overlays.matches(Tag(0x0028, 0x0010)), Some(false));
+        assert_eq!(overlays.matches(Tag(0x5000, 0x3000)), Some(false));
+
+        // A private creator lookup needs the data set, but only within
+        // its own group.
+        let private = TagSpecifier::PrivateTag {
+            group: 0x0013,
+            creator: "CTP".into(),
+            element_offset: 0x10,
+        };
+        assert_eq!(private.matches(Tag(0x0010, 0x0020)), Some(false));
+        assert_eq!(private.matches(Tag(0x0013, 0x1010)), None);
+
+        assert_eq!(TagSpecifier::Pattern(".*".into()).matches(Tag(0, 0)), None);
     }
 }
