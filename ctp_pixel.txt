@@ -1,0 +1,4293 @@
+FORMAT dicom
+
+# Converted from DicomPixelAnonymizer.script (CTP / RSNA Clinical Trial
+# Processor) - the Burned-in Annotation Library.
+#
+# CTP runs pixel masking as a separate pipeline stage from its metadata
+# anonymizer, so this is a separate recipe from ctp_default.txt. Run it
+# FIRST: these signatures match on Manufacturer, SeriesDescription,
+# Modality and similar tags that the metadata pass hashes or removes.
+#
+#   dicom-deid-rs <input> <stage1> ctp_pixel.txt
+#   dicom-deid-rs <stage1> <output> ctp_default.txt --var DATEINC ... --salt ...
+#
+# The intermediate directory holds clean pixels with fully identified
+# headers: treat it as PHI and delete it when done.
+#
+# 188 CTP signatures -> 487 labels.
+# 33 signatures mixed AND with OR under parentheses; the recipe
+# format evaluates conditions strictly left to right with no grouping, so
+# those were expanded into disjunctive normal form - one label per OR
+# branch, each carrying the same regions. Regions from every matching
+# label accumulate, so the result is equivalent.
+#
+# Translation notes:
+#   - CTP tag numbers became DICOM keywords: filter fields resolve by
+#     keyword only, and an unknown one silently never matches.
+#   - .containsIgnoreCase -> contains (already case-insensitive)
+#   - .equals / .equalsIgnoreCase -> equals (case-insensitive here; CTP's
+#     .equals is case-sensitive, so matching is marginally broader)
+#   - .startsWith(IgnoreCase) -> contains with a ^ anchor
+#   - Values are regex-escaped, since `contains` compiles them as regexes.
+#   - CTP's `SoftwareVersion` -> `SoftwareVersions` (the DICOM keyword).
+#   - CTP's `[1018,1018]` is not a DICOM tag; treated as a typo for
+#     (0018,1018) SecondaryCaptureDeviceManufacturerModelName.
+#
+# IMPORTANT (carried over from the CTP original): it is the user's
+# responsibility to review images and confirm all PHI is removed. This
+# library covers known regions in known devices, nothing more.
+
+%filter graylist
+
+LABEL CT GE CT Dose Series
+contains CodeMeaning IEC Body Dosimetry Phantom
+ctpcoordinates 0,0,512,200
+
+LABEL CT GE
+contains Modality CT
+  + contains Manufacturer GE MEDICAL
+  + contains SeriesDescription Dose Report
+ctpcoordinates 0,0,512,110
+
+LABEL CT GE 2
+contains Manufacturer GE MEDICAL
+  + contains CommentsOnRadiationDose DLP
+ctpcoordinates 0,0,512,110
+
+LABEL CT GE AW Workstation
+contains BurnedInAnnotation YES
+  + contains Manufacturer GE MEDICAL
+  + contains SeriesDescription AW electronic film
+ctpcoordinates 0,0,512,80
+
+LABEL CT GE 512 x 512 screen captures - Vessel analysis
+contains BurnedInAnnotation YES
+  + contains Manufacturer GE MEDICAL
+  + contains SeriesDescription AVA Report
+  + equals Rows 512
+ctpcoordinates 0,0,200,250
+
+LABEL CT GE 512 x 512 screen captures - Volume Rendering - MRCP
+contains ImageType VOLREN
+  + equals Rows 512
+  + equals Columns 512
+ctpcoordinates 350,0,162,30
+ctpcoordinates 390,80,122,15
+
+LABEL CT GE 1024 x 1024 screen captures
+contains BurnedInAnnotation YES
+  + contains Manufacturer GE MEDICAL
+  + equals Rows 1024
+ctpcoordinates 0,0,300,150
+ctpcoordinates 724,0,300,150
+
+LABEL CT VITREA Stent Planning Worksheet
+contains Manufacturer VITAL Images
+  + contains SeriesDescription AAA
+  + equals Rows 1041
+ctpcoordinates 0,0,795,150
+
+LABEL CT VITREA Stent Planning Worksheet 2
+contains Manufacturer VITAL Images
+  + contains SeriesDescription Report
+  + equals Rows 1041
+ctpcoordinates 0,0,795,150
+
+LABEL CT SIEMENS CT Dose Series - This removes PHI from Top of Dose image but rest of image is all white. Window Width and Center need to be set correctly.
+contains ImageType SECONDARY
+  + contains Modality CT
+  + contains Manufacturer SIEMENS
+  + equals Rows 860
+ctpcoordinates 0,0,1132,60
+
+LABEL CT PHILIPS
+contains Manufacturer PHILIPS
+  + contains ImageType DOSE
+ctpcoordinates 0,0,512,135
+
+LABEL CT Toshiba Aquilion One CT Dose Series
+equals Modality CT
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName Aquilion ONE
+  + contains ImageType SECONDARY
+  + equals Columns 512
+  + equals Rows 512
+  + equals WindowWidth 1
+ctpcoordinates 0,0,410,240
+
+LABEL PET CT SIEMENS Regression CT01
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName Sensation
+  + contains ImageType PROT
+  + equals Columns 512
+  + equals Rows 512
+  + contains OverlayDescription Siemens MedCom Object Graphics
+ctpcoordinates 0,0,337,135
+ctpcoordinates 338,67,107,16
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MP1
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^SIGNA_LX1\.MP1
+  + contains Rows 456
+  + contains Columns 456
+ctpcoordinates 0,0,456,60
+ctpcoordinates 300,60,456,95
+ctpcoordinates 0,425,456,500
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MP1 2
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^SIGNA_LX1\.MP1
+  + contains Rows 456
+  + contains Columns 456
+ctpcoordinates 0,0,456,60
+ctpcoordinates 300,60,456,95
+ctpcoordinates 0,425,456,500
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MP1 3
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^SIGNA_LX1\.MP1
+  + contains Rows 456
+  + contains Columns 456
+ctpcoordinates 0,0,456,60
+ctpcoordinates 300,60,456,95
+ctpcoordinates 0,425,456,500
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MP1 4
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^SIGNA_LX1\.MP1
+  + contains Rows 456
+  + contains Columns 456
+ctpcoordinates 0,0,456,60
+ctpcoordinates 300,60,456,95
+ctpcoordinates 0,425,456,500
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MP1 5
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^SIGNA_LX1\.MP1
+  + contains Rows 456
+  + contains Columns 456
+ctpcoordinates 0,0,456,60
+ctpcoordinates 300,60,456,95
+ctpcoordinates 0,425,456,500
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MP1 6
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^SIGNA_LX1\.MP1
+  + contains Rows 456
+  + contains Columns 456
+ctpcoordinates 0,0,456,60
+ctpcoordinates 300,60,456,95
+ctpcoordinates 0,425,456,500
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MR30.1_R02_2332.a
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions SIGNA_LX1\.MR30\.1_R02_2332\.a
+  + contains Rows 568
+  + contains Columns 568
+ctpcoordinates 0,0,568,110
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MR30.1_R02_2332.a 2
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions SIGNA_LX1\.MR30\.1_R02_2332\.a
+  + contains Rows 568
+  + contains Columns 568
+ctpcoordinates 0,0,568,110
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MR30.1_R02_2332.a 3
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions SIGNA_LX1\.MR30\.1_R02_2332\.a
+  + contains Rows 568
+  + contains Columns 568
+ctpcoordinates 0,0,568,110
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MR30.1_R02_2332.a 4
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions SIGNA_LX1\.MR30\.1_R02_2332\.a
+  + contains Rows 568
+  + contains Columns 568
+ctpcoordinates 0,0,568,110
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MR30.1_R02_2332.a 5
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions SIGNA_LX1\.MR30\.1_R02_2332\.a
+  + contains Rows 568
+  + contains Columns 568
+ctpcoordinates 0,0,568,110
+
+LABEL PET CT GE SIGNA - SIGNA_LX1.MR30.1_R02_2332.a 6
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^SIGNA PET/MR
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions SIGNA_LX1\.MR30\.1_R02_2332\.a
+  + contains Rows 568
+  + contains Columns 568
+ctpcoordinates 0,0,568,110
+
+LABEL PET CT GE Discovery
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 2
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 3
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 4
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 5
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 6
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 7
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 8
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 9
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 10
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 11
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 12
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 13
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 14
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 15
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 16
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 17
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 18
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 19
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 20
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 21
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 22
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 23
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 24
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 25
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 26
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 27
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 28
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 29
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 30
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 31
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 32
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 33
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 34
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 35
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 36
+contains Manufacturer ^GE MEDICAL
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 37
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 38
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 39
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 40
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 41
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 42
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 43
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 44
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 45
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 46
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 47
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 48
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 49
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 50
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 51
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 52
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 53
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 54
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 55
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 56
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 57
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 58
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 59
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 60
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 61
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 62
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 63
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 64
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 65
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 66
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 67
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 68
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 69
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 70
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 71
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 72
+contains Manufacturer ^GE MEDICAL
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 73
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 74
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 75
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 76
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 77
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 78
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 79
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 80
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 81
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 82
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 83
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 84
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 85
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 86
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 87
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 88
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 89
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 90
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 91
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 92
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 93
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 94
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 95
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 96
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 97
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 98
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 99
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 100
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 101
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 102
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 103
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 104
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 105
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 106
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 107
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 108
+contains Manufacturer ^GE MEDICAL
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 109
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 110
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 111
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 112
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 113
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 114
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 115
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 116
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 117
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 118
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 119
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 120
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 121
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 122
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 123
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 124
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 125
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 126
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 127
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 128
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 129
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 130
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 131
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 132
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 133
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 134
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 135
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 136
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 137
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 138
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 139
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 140
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 141
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 142
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 143
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 144
+contains Manufacturer ^GEMS
+  + equals Modality PT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 145
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 146
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 147
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 148
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 149
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 150
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 151
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 152
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 153
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 154
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 155
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 156
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 157
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 158
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 159
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 160
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 161
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 162
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 163
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 164
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 165
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 166
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 167
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 168
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 169
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 170
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 171
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 172
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 173
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 174
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 175
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 176
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 177
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 178
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 179
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 180
+contains Manufacturer ^GEMS
+  + equals Modality OT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 181
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 182
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 183
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 184
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 185
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 186
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 187
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 188
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 189
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 190
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 191
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 192
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 193
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 194
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 195
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 196
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 197
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 198
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 199
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 200
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 201
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 202
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 203
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 204
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^5
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 205
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 206
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 207
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 208
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 209
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 210
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 211
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 512
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 212
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 512
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 213
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 256
+  + contains Columns 256
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 214
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1024
+  + contains Columns 1024
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 215
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 1878
+  + contains Columns 835
+ctpcoordinates 0,0,500,80
+
+LABEL PET CT GE Discovery 216
+contains Manufacturer ^GEMS
+  + equals Modality CT
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains SoftwareVersions ^pet_columbia
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,500,80
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR -- NM
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains Rows 541
+  + contains Columns 328
+ctpcoordinates 0,0,550,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR -- NM 2
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains Rows 552
+  + contains Columns 547
+ctpcoordinates 0,0,550,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR -- NM 3
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains Rows 540
+  + contains Columns 409
+ctpcoordinates 0,0,550,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR -- NM 4
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains Rows 1092
+  + contains Columns 409
+ctpcoordinates 0,0,550,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR -- NM 5
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains Rows 192
+  + contains Columns 128
+ctpcoordinates 0,0,550,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR -- NM 6
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains Rows 536
+  + contains Columns 328
+ctpcoordinates 0,0,550,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR -- NM 7
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 4
+  + contains Rows 339
+  + contains Columns 328
+ctpcoordinates 0,0,550,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR - Xeleris 5 -- NM
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 5
+  + contains Rows 536
+  + contains Columns 328
+ctpcoordinates 0,0,330,50
+
+LABEL NM GE MEDICAL SYSTEMS NUCLEAR - Xeleris 5 -- NM 2
+contains Manufacturer ^GE MEDICAL SYSTEMS, NUCLEAR
+  + equals Modality NM
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Xeleris 5
+  + contains Rows 339
+  + contains Columns 328
+ctpcoordinates 0,0,330,50
+
+LABEL Ultrasound
+contains Manufacturer ACUSON
+  + contains ManufacturerModelName SEQUOIA
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,30
+ctpcoordinates 553,30,87,16
+
+LABEL Ultrasound 2
+contains Manufacturer ACUSON
+  + contains ManufacturerModelName SEQUOIA
+  + equals Rows 456
+  + equals Columns 576
+ctpcoordinates 0,0,576,31
+ctpcoordinates 493,31,83,17
+
+LABEL Ultrasound 3
+contains Manufacturer ACUSON
+  + contains ManufacturerModelName SEQUOIA
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,40
+
+LABEL Ultrasound 4
+contains Manufacturer ACUSON
+  + contains ManufacturerModelName SEQUOIA
+  + equals Rows 576
+  + equals Columns 768
+ctpcoordinates 0,0,768,40
+ctpcoordinates 672,40,96,16
+
+LABEL Ultrasound 5
+contains Manufacturer ACUSON
+  + contains ManufacturerModelName CYPRESS
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,32
+ctpcoordinates 560,48,80,36
+
+LABEL Ultrasound Aloka SSD-ALPHA5
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA5
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,25
+
+LABEL Ultrasound Aloka SSD-ALPHA5 2
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA6
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,25
+
+LABEL Ultrasound Aloka SSD-ALPHA5 3
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA7
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,25
+
+LABEL Ultrasound Aloka SSD-ALPHA5 4
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA10
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,25
+
+LABEL Ultrasound Aloka SSD-ALPHA5 5
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-5500
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,25
+
+LABEL Ultrasound Aloka
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA5
+  + equals Rows 480
+  + equals Columns 686
+ctpcoordinates 0,0,686,48
+
+LABEL Ultrasound Aloka 2
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA6
+  + equals Rows 480
+  + equals Columns 686
+ctpcoordinates 0,0,686,48
+
+LABEL Ultrasound Aloka 3
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA7
+  + equals Rows 480
+  + equals Columns 686
+ctpcoordinates 0,0,686,48
+
+LABEL Ultrasound Aloka 4
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA10
+  + equals Rows 480
+  + equals Columns 686
+ctpcoordinates 0,0,686,48
+
+LABEL Ultrasound Aloka 5
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-5500
+  + equals Rows 480
+  + equals Columns 686
+ctpcoordinates 0,0,686,48
+
+LABEL Ultrasound Aloka 6
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA5
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound Aloka 7
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA6
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound Aloka 8
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA7
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound Aloka 9
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA10
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound Aloka 10
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-5500
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound Aloka 11
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA5
+  + equals Rows 420
+  + equals Columns 608
+ctpcoordinates 0,0,608,24
+
+LABEL Ultrasound Aloka 12
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA6
+  + equals Rows 420
+  + equals Columns 608
+ctpcoordinates 0,0,608,24
+
+LABEL Ultrasound Aloka 13
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA7
+  + equals Rows 420
+  + equals Columns 608
+ctpcoordinates 0,0,608,24
+
+LABEL Ultrasound Aloka 14
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-ALPHA10
+  + equals Rows 420
+  + equals Columns 608
+ctpcoordinates 0,0,608,24
+
+LABEL Ultrasound Aloka 15
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName SSD-5500
+  + equals Rows 420
+  + equals Columns 608
+ctpcoordinates 0,0,608,24
+
+LABEL Ultrasound Aloka 16
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName Noblus
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,48
+
+LABEL Ultrasound Aloka 17
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName ProSound F75
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Aloka 18
+equals Modality US
+  + contains Manufacturer ALOKA
+  + contains ManufacturerModelName ProSound F75
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,40
+
+LABEL Ultrasound ATL -- not supported but this is a safety fallback
+equals Modality US
+  + contains Manufacturer ATL
+  + equals Rows 476
+  + equals Columns 640
+ctpcoordinates 0,0,640,36
+
+LABEL Ultrasound B-K Medical
+equals Modality US
+  + equals Manufacturer B-K Medical
+  + contains ManufacturerModelName 2202
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 128,0,420,32
+
+LABEL Ultrasound B-K Medical 2
+equals Modality US
+  + equals Manufacturer B-K Medical
+  + contains ManufacturerModelName 2202
+  + equals Rows 818
+  + equals Columns 1020
+ctpcoordinates 200,0,696,56
+
+LABEL Ultrasound B-K Medical 3
+equals Modality US
+  + equals Manufacturer BK Medical
+  + contains ManufacturerModelName 1202
+  + equals Rows 1072
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,147
+ctpcoordinates 905,168,117,730
+
+LABEL Ultrasound B-K Medical 4
+equals Modality US
+  + equals Manufacturer BK Medical
+  + contains ManufacturerModelName 2300
+  + equals Rows 1072
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,147
+ctpcoordinates 905,168,117,730
+
+LABEL Ultrasound B-K Medical 5
+equals Modality US
+  + equals Manufacturer B-K Medical
+  + contains ManufacturerModelName 1202
+  + equals Rows 1072
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,147
+ctpcoordinates 905,168,117,730
+
+LABEL Ultrasound B-K Medical 6
+equals Modality US
+  + equals Manufacturer B-K Medical
+  + contains ManufacturerModelName 2300
+  + equals Rows 1072
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,147
+ctpcoordinates 905,168,117,730
+
+LABEL Ultrasound B-K Medical 7
+equals Modality US
+  + equals Manufacturer BK Medical
+  + contains ManufacturerModelName 1202
+  + equals Rows 802
+  + equals Columns 992
+ctpcoordinates 888,0,104,802
+
+LABEL Ultrasound B-K Medical 8
+equals Modality US
+  + equals Manufacturer BK Medical
+  + contains ManufacturerModelName 2300
+  + equals Rows 802
+  + equals Columns 992
+ctpcoordinates 888,0,104,802
+
+LABEL Ultrasound B-K Medical 9
+equals Modality US
+  + equals Manufacturer B-K Medical
+  + contains ManufacturerModelName 1202
+  + equals Rows 802
+  + equals Columns 992
+ctpcoordinates 888,0,104,802
+
+LABEL Ultrasound B-K Medical 10
+equals Modality US
+  + equals Manufacturer B-K Medical
+  + contains ManufacturerModelName 2300
+  + equals Rows 802
+  + equals Columns 992
+ctpcoordinates 888,0,104,802
+
+LABEL Ultrasound GE
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 873
+  + equals Columns 1552
+ctpcoordinates 0,0,1195,68
+
+LABEL Ultrasound GE 2
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 970
+  + equals Columns 1552
+ctpcoordinates 0,0,1174,68
+
+LABEL Ultrasound GE 3
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 819
+  + equals Columns 1456
+ctpcoordinates 0,0,1122,70
+
+LABEL Ultrasound GE 4
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 802
+  + equals Columns 1442
+ctpcoordinates 0,0,1000,32
+
+LABEL Ultrasound GE 5
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 748
+  + equals Columns 1346
+ctpcoordinates 0,0,1000,24
+
+LABEL Ultrasound GE 6
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 720
+  + equals Columns 1280
+ctpcoordinates 0,0,968,70
+
+LABEL Ultrasound GE 7
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 649
+  + equals Columns 1170
+ctpcoordinates 0,0,880,24
+
+LABEL Ultrasound GE 8
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 873
+  + equals Columns 1164
+ctpcoordinates 0,0,808,70
+
+LABEL Ultrasound GE 9
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 819
+  + equals Columns 1092
+ctpcoordinates 0,0,758,68
+
+LABEL Ultrasound GE 10
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 802
+  + equals Columns 1054
+ctpcoordinates 0,0,754,26
+
+LABEL Ultrasound GE 11
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,666,68
+
+LABEL Ultrasound GE 12
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 649
+  + equals Columns 850
+ctpcoordinates 0,0,584,20
+
+LABEL Ultrasound GE 13
+equals Modality US
+  + contains ManufacturerModelName LOGIQS8
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,850,64
+
+LABEL Ultrasound GE 14
+contains ManufacturerModelName LOGIQ S6
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,712,67
+
+LABEL Ultrasound GE 15
+equals ManufacturerModelName LOGIQS7
+  + contains SoftwareVersions ^LOGIQ S6
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,712,67
+
+LABEL Ultrasound GE 16
+equals Modality US
+  + contains ManufacturerModelName LOGIQS7
+  + equals Rows 649
+  + equals Columns 850
+ctpcoordinates 0,0,592,26
+
+LABEL Ultrasound GE 17
+equals Modality US
+  + contains ManufacturerModelName LOGIQS7
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,666,68
+
+LABEL Ultrasound GE 18
+equals Modality US
+  + contains ManufacturerModelName LOGIQS7
+  + equals Rows 720
+  + equals Columns 1280
+ctpcoordinates 0,0,968,70
+
+LABEL Ultrasound GE 19
+equals Modality US
+  + contains ManufacturerModelName LOGIQe
+  + equals Rows 614
+  + equals Columns 820
+ctpcoordinates 0,0,568,55
+
+LABEL Ultrasound GE 20
+equals Modality US
+  + contains ManufacturerModelName LOGIQe
+  + equals Rows 590
+  + equals Columns 819
+ctpcoordinates 0,0,568,55
+
+LABEL Ultrasound GE 21
+equals Modality US
+  + contains ManufacturerModelName LOGIQi
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,554,57
+
+LABEL Ultrasound GE 22
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 970
+  + equals Columns 1552
+ctpcoordinates 0,0,1174,68
+
+LABEL Ultrasound GE 23
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 873
+  + equals Columns 1552
+ctpcoordinates 0,0,1196,68
+
+LABEL Ultrasound GE 24
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 819
+  + equals Columns 1456
+ctpcoordinates 0,0,1122,70
+
+LABEL Ultrasound GE 25
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 899
+  + equals Columns 1442
+ctpcoordinates 0,0,1000,32
+
+LABEL Ultrasound GE 26
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 802
+  + equals Columns 1442
+ctpcoordinates 0,0,1000,32
+
+LABEL Ultrasound GE 27
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 748
+  + equals Columns 1346
+ctpcoordinates 0,0,1000,24
+
+LABEL Ultrasound GE 28
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 768
+  + equals Columns 1280
+ctpcoordinates 0,0,826,92
+
+LABEL Ultrasound GE 29
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 720
+  + equals Columns 1280
+ctpcoordinates 0,0,968,70
+
+LABEL Ultrasound GE 30
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 649
+  + equals Columns 1170
+ctpcoordinates 0,0,880,24
+
+LABEL Ultrasound GE 31
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 873
+  + equals Columns 1164
+ctpcoordinates 0,0,808,70
+
+LABEL Ultrasound GE 32
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 819
+  + equals Columns 1092
+ctpcoordinates 0,0,758,68
+
+LABEL Ultrasound GE 33
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 802
+  + equals Columns 1054
+ctpcoordinates 0,0,700,30
+
+LABEL Ultrasound GE 34
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,666,68
+
+LABEL Ultrasound GE 35
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 748
+  + equals Columns 982
+ctpcoordinates 0,0,670,28
+
+LABEL Ultrasound GE 36
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 649
+  + equals Columns 850
+ctpcoordinates 0,0,595,26
+
+LABEL Ultrasound GE 37
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 649
+  + equals Columns 852
+ctpcoordinates 0,0,595,26
+
+LABEL Ultrasound GE 38
+equals Modality US
+  + contains ManufacturerModelName LOGIQE9
+  + equals Rows 614
+  + equals Columns 820
+ctpcoordinates 0,0,568,55
+
+LABEL Ultrasound GE 39
+equals Modality US
+  + contains ManufacturerModelName LOGIQP5
+  + equals Rows 614
+  + equals Columns 816
+ctpcoordinates 0,0,566,60
+
+LABEL Ultrasound GE 40
+equals Modality US
+  + contains ManufacturerModelName LOGIQP6
+  + equals Rows 614
+  + equals Columns 816
+ctpcoordinates 0,0,566,60
+
+LABEL Ultrasound GE 41
+equals Modality US
+  + contains ManufacturerModelName LOGIQP9
+  + equals Rows 856
+  + equals Columns 1142
+ctpcoordinates 0,0,794,68
+
+LABEL Ultrasound GE 42
+equals Modality US
+  + contains ManufacturerModelName LOGIQ 400
+  + equals Rows 462
+  + equals Columns 608
+ctpcoordinates 0,0,608,31
+
+LABEL Ultrasound GE 43
+equals Modality US
+  + contains ManufacturerModelName LOGIQ 500
+  + equals Rows 462
+  + equals Columns 608
+ctpcoordinates 0,0,608,31
+
+LABEL Ultrasound GE 44
+equals Modality US
+  + contains ManufacturerModelName LOGIQ 700
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,41
+
+LABEL Ultrasound GE 45
+equals Modality US
+  + contains ManufacturerModelName LOGIQ5
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,444,44
+
+LABEL Ultrasound GE 46
+equals Modality US
+  + contains ManufacturerModelName LOGIQ7
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,444,44
+
+LABEL Ultrasound GE 47
+equals Modality US
+  + contains ManufacturerModelName LOGIQ7
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,712,70
+
+LABEL Ultrasound GE 48
+equals Modality US
+  + contains ManufacturerModelName LOGIQ9
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,444,44
+
+LABEL Ultrasound GE This is here for when we have support for secondary
+equals Modality US
+  + contains ManufacturerModelName LOGIQ9
+  + equals Rows 600
+  + equals Columns 800
+  + equals SOPClassUID 1.2.840.10008.5.1.4.1.1.7
+ctpcoordinates 0,0,605,44
+
+LABEL Ultrasound GE 49
+equals Modality US
+  + contains ManufacturerModelName LOGIQ9
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,712,67
+
+LABEL Ultrasound GE 50
+equals Modality US
+  + contains ManufacturerModelName Vivide
+  + equals Rows 614
+  + equals Columns 820
+ctpcoordinates 0,0,568,55
+
+LABEL Ultrasound GE 51
+equals Modality US
+  + contains ManufacturerModelName Vivid i
+  + equals Rows 422
+  + equals Columns 636
+ctpcoordinates 0,0,220,25
+
+LABEL Ultrasound GE 52
+equals Modality US
+  + contains ManufacturerModelName Vivid i
+  + equals Rows 434
+  + equals Columns 636
+ctpcoordinates 0,0,280,24
+
+LABEL Ultrasound GE 53
+equals Modality US
+  + contains ManufacturerModelName Vivid S5
+  + equals Rows 422
+  + equals Columns 636
+ctpcoordinates 0,0,220,25
+
+LABEL Ultrasound GE 54
+equals Modality US
+  + contains ManufacturerModelName Vivid S6
+  + equals Rows 422
+  + equals Columns 636
+ctpcoordinates 0,0,220,25
+
+LABEL Ultrasound GE 55
+equals Modality US
+  + contains ManufacturerModelName Vivid S6
+  + equals Rows 434
+  + equals Columns 636
+ctpcoordinates 0,0,280,24
+
+LABEL Ultrasound GE 56
+equals Modality US
+  + contains ManufacturerModelName Vivid7
+  + equals Rows 434
+  + equals Columns 636
+ctpcoordinates 0,0,280,24
+
+LABEL Ultrasound GE 57
+equals Modality US
+  + contains ManufacturerModelName Vivid7
+  + equals Rows 484
+  + equals Columns 636
+ctpcoordinates 0,0,584,48
+
+LABEL Ultrasound GE 58
+equals Modality US
+  + contains ManufacturerModelName Vivid q
+  + equals Rows 422
+  + equals Columns 636
+ctpcoordinates 0,0,220,25
+
+LABEL Ultrasound GE 59
+equals Modality US
+  + contains ManufacturerModelName Vivid q
+  + equals Rows 434
+  + equals Columns 636
+ctpcoordinates 0,0,280,24
+
+LABEL Ultrasound GE 60
+equals Modality US
+  + contains ManufacturerModelName Vivid E9
+  + equals Rows 759
+  + equals Columns 1020
+ctpcoordinates 0,0,800,48
+
+LABEL Ultrasound GE 61
+equals Modality US
+  + contains ManufacturerModelName Vivid E9
+  + equals Rows 434
+  + equals Columns 636
+ctpcoordinates 0,0,280,24
+
+LABEL Ultrasound GE 62
+equals Modality US
+  + contains ManufacturerModelName Vivid E9
+  + equals Rows 484
+  + equals Columns 636
+ctpcoordinates 0,0,584,48
+
+LABEL Ultrasound GE 63
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,48
+
+LABEL Ultrasound GE 64
+equals Modality US
+  + contains ManufacturerModelName Vivid E95
+  + equals Rows 708
+  + equals Columns 1016
+ctpcoordinates 0,0,400,56
+
+LABEL Ultrasound GE 65
+equals Modality US
+  + contains ManufacturerModelName Vivid 3
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,392,32
+
+LABEL Ultrasound GE 66
+equals Modality US
+  + contains ManufacturerModelName Vivid 3
+  + equals Rows 434
+  + equals Columns 636
+ctpcoordinates 0,0,280,24
+
+LABEL Ultrasound GE 67
+equals Modality US
+  + contains ManufacturerModelName Voluson P
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound GE 68
+equals Modality US
+  + contains ManufacturerModelName Voluson S
+  + equals Rows 743
+  + equals Columns 975
+ctpcoordinates 0,0,975,72
+
+LABEL Ultrasound GE 69
+equals Modality US
+  + contains ManufacturerModelName Voluson E8
+  + equals Rows 852
+  + equals Columns 1136
+ctpcoordinates 0,0,1136,64
+
+LABEL Ultrasound GE 70
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,392,32
+
+LABEL Ultrasound GE 71
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound GE 72
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 650
+  + equals Columns 868
+ctpcoordinates 0,0,868,48
+
+LABEL Ultrasound GE 73
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 662
+  + equals Columns 930
+ctpcoordinates 0,0,930,64
+
+LABEL Ultrasound GE 74
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,56
+
+LABEL Ultrasound GE 75
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 735
+  + equals Columns 960
+ctpcoordinates 0,0,960,72
+
+LABEL Ultrasound GE 76
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 735
+  + equals Columns 975
+ctpcoordinates 0,0,975,72
+
+LABEL Ultrasound GE 77
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 743
+  + equals Columns 975
+ctpcoordinates 0,0,975,72
+
+LABEL Ultrasound GE 78
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 682
+  + equals Columns 1134
+ctpcoordinates 0,0,1134,56
+
+LABEL Ultrasound GE 79
+equals Modality US
+  + contains ManufacturerModelName V830
+  + equals Rows 852
+  + equals Columns 1136
+ctpcoordinates 0,0,1136,64
+
+LABEL Ultrasound PHILIPS iU22
+equals Modality US
+  + contains ManufacturerModelName iU22
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,47
+
+LABEL Ultrasound PHILIPS iU22 2
+equals Modality US
+  + contains ManufacturerModelName iU22
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound PHILIPS iU22 3
+equals Modality US
+  + contains ManufacturerModelName iU22
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,72
+
+LABEL Ultrasound PHILIPS EPIQ
+equals Modality US
+  + contains ManufacturerModelName EPIQ
+  + equals Rows 1080
+  + equals Columns 1920
+ctpcoordinates 0,0,1920,32
+
+LABEL Ultrasound PHILIPS
+equals Modality US
+  + contains ManufacturerModelName EPIQ
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,24
+
+LABEL Ultrasound PHILIPS 2
+equals Modality US
+  + contains ManufacturerModelName EPIQ
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,16
+
+LABEL Ultrasound PHILIPS iE33
+equals Modality US
+  + contains ManufacturerModelName iE33
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,48
+
+LABEL Ultrasound PHILIPS iE33 2
+equals Modality US
+  + contains ManufacturerModelName iE33
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound PHILIPS iE33 3
+equals Modality US
+  + contains ManufacturerModelName iE33
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,72
+
+LABEL Ultrasound PHILIPS VT
+equals Modality US
+  + contains ManufacturerModelName VT
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,72
+
+LABEL Ultrasound PHILIPS CX50
+equals Modality US
+  + contains ManufacturerModelName CX50
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound PHILIPS CX30
+equals Modality US
+  + contains ManufacturerModelName CX30
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound PHILIPS ClearVue 550
+equals Modality US
+  + contains ManufacturerModelName ClearVue 550
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound PHILIPS HD15
+equals Modality US
+  + contains ManufacturerModelName HD15
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound PHILIPS Sparq
+equals Modality US
+  + contains ManufacturerModelName Sparq
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound PHILIPS Affiniti
+equals Modality US
+  + contains ManufacturerModelName Affiniti
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,16
+
+LABEL Ultrasound PHILIPS Affiniti 2
+equals Modality US
+  + contains ManufacturerModelName Affiniti
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,24
+
+LABEL Ultrasound PHILIPS Affiniti 3
+equals Modality US
+  + contains ManufacturerModelName Affiniti
+  + equals Rows 1080
+  + equals Columns 1920
+ctpcoordinates 0,0,1920,32
+
+LABEL Ultrasound Siemens DO NOT CHECK FOR MODALITY US s found marked as CT
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName S1000
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens DO NOT CHECK FOR MODALITY US s found marked as CT 2
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName S2000
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens DO NOT CHECK FOR MODALITY US s found marked as CT 3
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName S3000
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens DO NOT CHECK FOR MODALITY US s found marked as CT 4
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName Antares
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens Single-frame only
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName S2000
+  + contains SOPClassUID ^1\.2\.840\.10008\.5\.1\.4\.1\.1\.6
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,19
+ctpcoordinates 0,19,160,55
+
+LABEL Ultrasound Siemens Single-frame only 2
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName Antares
+  + contains SOPClassUID ^1\.2\.840\.10008\.5\.1\.4\.1\.1\.6
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,19
+ctpcoordinates 0,19,160,55
+
+LABEL Ultrasound Siemens
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName X150
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Siemens 2
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName ACUSON X300
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Siemens 3
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName ACUSON X700
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Siemens 4
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName ACUSON P500
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Siemens 5
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName X150
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens 6
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName ACUSON X300
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens 7
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName ACUSON P500
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens 8
+contains Manufacturer SIEMENS
+  + equals ManufacturerModelName ACUSON X700
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Siemens 9
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName SC2000
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,712,40
+
+LABEL Ultrasound Siemens 10
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName Acuson Freestyle
+  + equals Rows 656
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound Siemens 11
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName Acuson Freestyle
+  + equals Rows 664
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound Siemens 12
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName ELEGRA
+  + equals Rows 666
+  + equals Columns 888
+ctpcoordinates 0,0,888,48
+
+LABEL Ultrasound Siemens 13
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName G60 S
+  + equals Rows 547
+  + equals Columns 692
+ctpcoordinates 0,0,692,40
+
+LABEL Ultrasound Siemens 14
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName G50 S
+  + equals Rows 547
+  + equals Columns 692
+ctpcoordinates 0,0,692,40
+
+LABEL Ultrasound Siemens 15
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName G60 S
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,42
+
+LABEL Ultrasound Siemens 16
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName G50 S
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,42
+
+LABEL Ultrasound Siemens 17
+contains Manufacturer SIEMENS
+  + contains ManufacturerModelName G40
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound SuperSonic Imagine
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 1050
+  + equals Columns 1400
+ctpcoordinates 0,0,1400,90
+
+LABEL Ultrasound SuperSonic Imagine 2
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 1080
+  + equals Columns 1440
+ctpcoordinates 0,0,1440,90
+
+LABEL Ultrasound SuperSonic Imagine 3
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 782
+  + equals Columns 1042
+ctpcoordinates 0,0,1042,56
+
+LABEL Ultrasound SuperSonic Imagine 4
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 816
+  + equals Columns 1088
+ctpcoordinates 0,0,1088,56
+
+LABEL Ultrasound SuperSonic Imagine 5
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 788
+  + equals Columns 1050
+ctpcoordinates 0,0,1050,70
+
+LABEL Ultrasound SuperSonic Imagine 6
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 525
+  + equals Columns 700
+ctpcoordinates 0,0,700,48
+
+LABEL Ultrasound SuperSonic Imagine 7
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 810
+  + equals Columns 1080
+ctpcoordinates 0,0,1080,70
+
+LABEL Ultrasound SuperSonic Imagine 8
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 638
+  + equals Columns 851
+ctpcoordinates 0,0,851,48
+
+LABEL Ultrasound SuperSonic Imagine 9
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 812
+  + equals Columns 1082
+ctpcoordinates 0,0,980,56
+
+LABEL Ultrasound SuperSonic Imagine 10
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 930
+  + equals Columns 1240
+ctpcoordinates 0,0,1240,70
+
+LABEL Ultrasound SuperSonic Imagine 11
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 894
+  + equals Columns 1192
+ctpcoordinates 0,0,1080,64
+
+LABEL Ultrasound SuperSonic Imagine 12
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 819
+  + equals Columns 1092
+ctpcoordinates 0,0,980,56
+
+LABEL Ultrasound SuperSonic Imagine 13
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 776
+  + equals Columns 1035
+ctpcoordinates 0,0,900,56
+
+LABEL Ultrasound SuperSonic Imagine 14
+equals Modality US
+  + contains Manufacturer SuperSonic
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 900
+  + equals Columns 1200
+ctpcoordinates 0,0,1080,64
+
+LABEL Ultrasound Toshiba
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName A500
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,60
+
+LABEL Ultrasound Toshiba 2
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName A400
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,60
+
+LABEL Ultrasound Toshiba 3
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName A300
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,60
+
+LABEL Ultrasound Toshiba 4
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName TUS-X200
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,60
+
+LABEL Ultrasound Toshiba 5
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName SSH-880CV
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,60
+
+LABEL Ultrasound Toshiba 6
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName AI700
+  + equals Rows 960
+  + equals Columns 1280
+ctpcoordinates 0,0,1208,72
+
+LABEL Ultrasound Toshiba 7
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName Aplio
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Toshiba 8
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName Xario
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Toshiba 9
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName Aplio
+  + equals Rows 537
+  + equals Columns 716
+ctpcoordinates 0,0,716,40
+
+LABEL Ultrasound Toshiba 10
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName Xario
+  + equals Rows 537
+  + equals Columns 716
+ctpcoordinates 0,0,716,40
+
+LABEL Ultrasound Toshiba 11
+equals Modality US
+  + contains Manufacturer TOSHIBA
+  + contains ManufacturerModelName Viamo
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,56
+
+LABEL Ultrasound SonoSite
+equals Modality US
+  + contains Manufacturer SonoSite
+  + contains ManufacturerModelName Turbo
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,24
+
+LABEL Ultrasound SonoSite 2
+equals Modality US
+  + contains Manufacturer SonoSite
+  + contains ManufacturerModelName Nano
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,24
+
+LABEL Ultrasound SonoSite 3
+equals Modality US
+  + contains Manufacturer SonoSite
+  + contains ManufacturerModelName MicroMAXX
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,24
+
+LABEL Ultrasound SonoSite 4
+equals Modality US
+  + contains Manufacturer SonoSite
+  + contains ManufacturerModelName Edge II
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,24
+
+LABEL Ultrasound SonoSite 5
+equals Modality US
+  + contains Manufacturer SonoSite
+  + contains ManufacturerModelName Titan
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,24
+
+LABEL Ultrasound SonoSite 6
+equals Modality US
+  + contains Manufacturer SonoSite
+  + contains ManufacturerModelName X-Porte
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,32
+
+LABEL Ultrasound Samsung Medison
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName RS80A
+  + equals Rows 872
+  + equals Columns 1280
+ctpcoordinates 0,0,1280,72
+
+LABEL Ultrasound Samsung Medison 2
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName RS80A
+  + equals Rows 872
+  + equals Columns 1152
+ctpcoordinates 0,0,1152,72
+
+LABEL Ultrasound Samsung Medison 3
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName ACCUVIX
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,40
+
+LABEL Ultrasound Samsung Medison 4
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName H60
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,960,64
+
+LABEL Ultrasound Samsung Medison 5
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName SonoAce R7
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Samsung Medison 6
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName SonoAce X8
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Samsung Medison 7
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName Accuvix V10
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Samsung Medison 8
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName Accuvix V20
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Samsung Medison 9
+equals Modality US
+  + contains Manufacturer MEDISON
+  + contains ManufacturerModelName Accuvix XG
+  + equals Rows 768
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,56
+
+LABEL Ultrasound Zonare
+equals Modality US
+  + contains Manufacturer Zonare
+  + contains ManufacturerModelName Z_ONE
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,40
+
+LABEL Ultrasound Zonare 2
+equals Modality US
+  + contains Manufacturer Zonare
+  + contains ManufacturerModelName ZS3
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,40
+
+LABEL Ultrasound Zonare 3
+equals Modality US
+  + contains Manufacturer Zonare
+  + contains ManufacturerModelName ZS3\+
+  + equals Rows 480
+  + equals Columns 640
+ctpcoordinates 0,0,640,40
+
+LABEL Ultrasound Zonare 4
+equals Modality US
+  + contains Manufacturer Zonare
+  + contains ManufacturerModelName Z_ONE
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Zonare 5
+equals Modality US
+  + contains Manufacturer Zonare
+  + contains ManufacturerModelName ZS3
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Zonare 6
+equals Modality US
+  + contains Manufacturer Zonare
+  + contains ManufacturerModelName ZS3\+
+  + equals Rows 600
+  + equals Columns 800
+ctpcoordinates 0,0,800,40
+
+LABEL Ultrasound Supersonic Imagine 5A
+equals Modality US
+  + contains Manufacturer SuperSonic Imagine SA
+  + contains ManufacturerModelName Aixplorer
+  + equals Rows 1050
+  + equals Columns 1400
+ctpcoordinates 0,0,1400,89
+
+LABEL CR DR Canon
+contains Manufacturer Canon
+  + contains ManufacturerModelName CXDI
+  + equals Rows 2592
+ctpcoordinates 0,0,2208,80
+ctpcoordinates 0,2512,2208,80
+
+LABEL NM SIEMENS
+contains ImageType SECONDARY
+  + contains Modality NM
+  + contains Manufacturer SIEMENS
+  + equals Rows 860
+ctpcoordinates 0,0,1132,82
+ctpcoordinates 0,780,1132,80
+
+LABEL OTHER ADAC
+contains Manufacturer ADAC
+  + equals Rows 832
+  + equals Columns 1024
+ctpcoordinates 0,0,1024,60
+ctpcoordinates 0,762,1024,80
+
+LABEL OTHER MEDRAD Injection Profile
+contains SeriesDescription MEDRAD
+  + equals Rows 1077
+  + equals Columns 750
+ctpcoordinates 0,0,750,230
+
+LABEL CT PET REG-PCT01 - GE PT CT fusion series
+equals Modality PT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + equals Rows 512
+  + equals Columns 512
+ctpcoordinates 256,0,256,22
+ctpcoordinates 300,22,212,80
+ctpcoordinates 10,478,100,10
+
+LABEL CT PET REG-PCT01 - GE PT CT fusion series 2
+equals Modality PT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + equals Rows 512
+  + equals Columns 512
+ctpcoordinates 256,0,256,22
+ctpcoordinates 300,22,212,80
+ctpcoordinates 10,478,100,10
+
+LABEL CT PET REG-PCT01 - GE PT CT fusion series 3
+equals Modality OT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + equals Rows 512
+  + equals Columns 512
+ctpcoordinates 256,0,256,22
+ctpcoordinates 300,22,212,80
+ctpcoordinates 10,478,100,10
+
+LABEL CT PET REG-PCT01 - GE PT CT fusion series 4
+equals Modality OT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + equals Rows 512
+  + equals Columns 512
+ctpcoordinates 256,0,256,22
+ctpcoordinates 300,22,212,80
+ctpcoordinates 10,478,100,10
+
+LABEL CT PET REG-PCT02 GE - PT CT fusion series
+equals Modality PT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + equals Columns 256
+  + equals Rows 512
+ctpcoordinates 0,0,256,50
+
+LABEL CT PET REG-PCT02 GE - PT CT fusion series 2
+equals Modality PT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + equals Columns 256
+  + equals Rows 512
+ctpcoordinates 0,0,256,50
+
+LABEL CT PET REG-PCT02 GE - PT CT fusion series 3
+equals Modality OT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^5
+  + equals Columns 256
+  + equals Rows 512
+ctpcoordinates 0,0,256,50
+
+LABEL CT PET REG-PCT02 GE - PT CT fusion series 4
+equals Modality OT
+  + contains Manufacturer ^GE MEDICAL
+  + contains ManufacturerModelName ^Discovery
+  + contains SecondaryCaptureDeviceManufacturerModelName ^Volume Viewer
+  + contains SoftwareVersions ^4
+  + equals Columns 256
+  + equals Rows 512
+ctpcoordinates 0,0,256,50
+
+LABEL CT PET REG-PCT03 Philips PT CT fusion
+equals Modality PT
+  + contains Manufacturer ^Philips
+  + contains ManufacturerModelName ^Guardian
+  + contains SecondaryCaptureDeviceManufacturerModelName ^EBW
+  + contains SoftwareVersions ^9\.3\.1
+  + equals Columns 638
+  + equals Rows 839
+ctpcoordinates 0,0,638,80
+
+LABEL CT PET REG-PCT04 Philips PT CT fusion
+equals Modality PT
+  + contains Manufacturer ^Philips
+  + contains ManufacturerModelName ^Guardian
+  + contains SecondaryCaptureDeviceManufacturerModelName ^EBW
+  + contains SoftwareVersions ^9\.3\.1
+  + equals Columns 453
+  + equals Rows 918
+ctpcoordinates 0,0,453,100
+
+LABEL CT PET REG-PCT05 Philips PT CT fusion
+equals Modality PT
+  + contains Manufacturer ^Philips
+  + contains ManufacturerModelName ^Guardian
+  + contains SecondaryCaptureDeviceManufacturerModelName ^EBW
+  + contains SoftwareVersions ^9\.3\.1
+  + equals Columns 546
+  + equals Rows 918
+ctpcoordinates 0,0,546,100
+
+LABEL CT PET REG-PCT06 Philips PT CT fusion
+equals Modality PT
+  + contains Manufacturer ^Philips
+  + contains ManufacturerModelName ^Guardian
+  + contains SecondaryCaptureDeviceManufacturerModelName ^EBW
+  + contains SoftwareVersions ^9\.3\.1
+  + equals Columns 638
+  + equals Rows 907
+ctpcoordinates 0,0,638,110
+
+LABEL CR DX REG-XR01 Canon CXDI
+equals Modality CR
+  + contains Manufacturer Canon
+  + contains ManufacturerModelName ^CXDI
+  + contains SoftwareVersions ^V4
+ctpcoordinates 0,0,10000,104
+
+LABEL CR DX REG-XR01 Canon CXDI 2
+equals Modality CR
+  + contains Manufacturer Canon
+  + contains ManufacturerModelName ^CXDI
+  + contains SoftwareVersions ^V6
+ctpcoordinates 0,0,10000,104
+
+LABEL CR DX REG-XR01 Canon CXDI 3
+equals Modality CR
+  + contains Manufacturer Canon
+  + contains ManufacturerModelName ^CXDI
+  + contains SoftwareVersions ^2\.
+ctpcoordinates 0,0,10000,104
+
+LABEL CR DX REG-XR01 Canon CXDI 4
+equals Modality DX
+  + contains Manufacturer Canon
+  + contains ManufacturerModelName ^CXDI
+  + contains SoftwareVersions ^V4
+ctpcoordinates 0,0,10000,104
+
+LABEL CR DX REG-XR01 Canon CXDI 5
+equals Modality DX
+  + contains Manufacturer Canon
+  + contains ManufacturerModelName ^CXDI
+  + contains SoftwareVersions ^V6
+ctpcoordinates 0,0,10000,104
+
+LABEL CR DX REG-XR01 Canon CXDI 6
+equals Modality DX
+  + contains Manufacturer Canon
+  + contains ManufacturerModelName ^CXDI
+  + contains SoftwareVersions ^2\.
+ctpcoordinates 0,0,10000,104
+
+LABEL CR DX REG-XR02 Canon AXIOM
+equals Modality CR
+  + contains Manufacturer Canon
+  + contains ManufacturerModelName ^AXIOM
+  + contains SoftwareVersions ^V6
+ctpcoordinates 0,0,10000,115
+
+LABEL CR DX REG-XR03 KONICA 0402
+equals Modality CR
+  + contains Manufacturer KONICA
+  + contains ManufacturerModelName 0402
+  + contains SoftwareVersions ^6\.
+  + equals Rows 2446
+  + equals Columns 2446
+ctpcoordinates 0,2308,2446,137
+
+LABEL CR DX REG-XR04 KONICA 0402
+equals Modality CR
+  + contains Manufacturer KONICA
+  + contains ManufacturerModelName 0402
+  + contains SoftwareVersions ^2\.
+  + equals Rows 2010
+  + equals Columns 2446
+ctpcoordinates 0,0,2446,115
+
+LABEL CR DX REG-XR05 SHIMADZU CXDI
+equals Modality CR
+  + contains Manufacturer ^Shimadzu
+  + contains ManufacturerModelName ^CXDI
+  + contains SoftwareVersions ^2\.
+ctpcoordinates 0,0,10000,90
+
+LABEL CR DX REG-XR06 Cuattro CloudDR
+equals Modality DX
+  + contains Manufacturer ^Cuattro
+  + contains ManufacturerModelName ^CloudDR
+  + contains SoftwareVersions ^3\.
+  + equals Rows 3072
+  + equals Columns 3072
+ctpcoordinates 2500,0,572,400
+
+LABEL CR DX REG-XR07 Medlink Imaging
+equals Modality DX
+  + contains Manufacturer ^Medlink Imaging
+  + contains ManufacturerModelName ^AltoDR
+  + contains SoftwareVersions ^1\.
+  + equals Rows 2922
+  + equals Columns 1936
+ctpcoordinates 0,0,1936,50
+
+LABEL CR DX NOTE The provider information is not removed since the height of the image is variable.
+equals Modality CR
+  + contains Manufacturer ^MedicaTechUSA
+  + contains ManufacturerModelName ^KrystalRad 660
+  + contains SoftwareVersions ^1\.
+ctpcoordinates 0,0,10000,70
+
+LABEL CR DX NOTE The provider information is not removed since the height of the image is variable. 2
+equals Modality DX
+  + contains Manufacturer ^MedicaTechUSA
+  + contains ManufacturerModelName ^KrystalRad 660
+  + contains SoftwareVersions ^1\.
+ctpcoordinates 0,0,10000,70

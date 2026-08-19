@@ -55,6 +55,14 @@ pub fn resolve_tags(
             Ok(vec![entry.tag()])
         }
         TagSpecifier::TagValue(tag) => Ok(vec![*tag]),
+        // Unlike an exact tag, a wildcard has to be resolved against the
+        // data set: it stands for whichever of the repeating group's
+        // tags this particular file happens to carry.
+        TagSpecifier::Wildcard { .. } => Ok(obj
+            .iter()
+            .map(|elem| elem.tag())
+            .filter(|tag| specifier.matches(*tag).unwrap_or(false))
+            .collect()),
         TagSpecifier::Pattern(pattern) => {
             let re = Regex::new(pattern)
                 .map_err(|e| DeidError::TagResolution(format!("invalid regex: {}", e)))?;
@@ -213,5 +221,106 @@ mod tests {
         let matched = resolve_tags(&spec, &obj).expect("should resolve");
         assert!(matched.contains(&tags::PATIENT_NAME));
         assert!(matched.contains(&tags::PATIENT_ID));
+    }
+
+    // -- r-3-4-4 -------------------------------------------------------------
+
+    /// Build an object carrying overlay planes, curve groups, and a few
+    /// ordinary tags that must survive.
+    fn obj_with_repeating_groups() -> InMemDicomObject {
+        let mut obj = create_test_obj();
+        for group in [0x6000u16, 0x6002, 0x601E, 0x6080, 0x60FE] {
+            put_str(&mut obj, Tag(group, 0x3000), VR::OW, "overlay-bitmap");
+            put_str(&mut obj, Tag(group, 0x0022), VR::LO, "Dr Smith review");
+            put_str(&mut obj, Tag(group, 0x0010), VR::US, "512");
+        }
+        for group in [0x5000u16, 0x5002, 0x50FE] {
+            put_str(&mut obj, Tag(group, 0x3000), VR::OW, "curve-data");
+            put_str(&mut obj, Tag(group, 0x200C), VR::OW, "audio-sample");
+        }
+        // Must not be touched: image Rows/Columns share the element
+        // numbers 0010/0011 with OverlayRows/OverlayColumns.
+        put_str(&mut obj, tags::ROWS, VR::US, "512");
+        put_str(&mut obj, tags::COLUMNS, VR::US, "512");
+        put_str(&mut obj, tags::PATIENT_ID, VR::LO, "MRN1");
+        obj
+    }
+
+    /// Requirement r-3-4-4: a wildcard group matches every plane.
+    #[test]
+    fn r3_4_4_wildcard_group_matches_all_overlay_planes() {
+        let obj = obj_with_repeating_groups();
+        let spec = TagSpecifier::Wildcard {
+            group: (0x6000, 0xFF00),
+            element: (0x0000, 0x0000),
+        };
+        let matched = resolve_tags(&spec, &obj).expect("should resolve");
+        assert_eq!(matched.len(), 15, "5 overlay groups x 3 elements");
+        assert!(matched.iter().all(|t| (0x6000..=0x60FF).contains(&t.0)));
+    }
+
+    /// Requirement r-3-4-4: the image Rows/Columns tags share element
+    /// numbers with OverlayRows/OverlayColumns and must never match.
+    #[test]
+    fn r3_4_4_wildcard_does_not_match_image_pixel_module() {
+        let obj = obj_with_repeating_groups();
+        for spec in [
+            TagSpecifier::Wildcard {
+                group: (0x6000, 0xFF00),
+                element: (0x0000, 0x0000),
+            },
+            TagSpecifier::Wildcard {
+                group: (0x5000, 0xFF00),
+                element: (0x0000, 0x0000),
+            },
+        ] {
+            let matched = resolve_tags(&spec, &obj).expect("should resolve");
+            assert!(!matched.contains(&tags::ROWS), "must not match (0028,0010)");
+            assert!(
+                !matched.contains(&tags::COLUMNS),
+                "must not match (0028,0011)"
+            );
+            assert!(!matched.contains(&tags::PATIENT_ID));
+        }
+    }
+
+    /// Requirement r-3-4-4: a wildcard element targets one attribute
+    /// across every plane.
+    #[test]
+    fn r3_4_4_wildcard_group_with_fixed_element() {
+        let obj = obj_with_repeating_groups();
+        let spec = TagSpecifier::Wildcard {
+            group: (0x6000, 0xFF00),
+            element: (0x3000, 0xFFFF),
+        };
+        let mut matched = resolve_tags(&spec, &obj).expect("should resolve");
+        matched.sort();
+        assert_eq!(
+            matched,
+            vec![
+                Tag(0x6000, 0x3000),
+                Tag(0x6002, 0x3000),
+                Tag(0x601E, 0x3000),
+                Tag(0x6080, 0x3000),
+                Tag(0x60FE, 0x3000),
+            ]
+        );
+    }
+
+    /// Requirement r-3-4-4: a wildcard resolves only against tags the
+    /// file actually carries, so an absent plane yields nothing.
+    #[test]
+    fn r3_4_4_wildcard_resolves_only_present_tags() {
+        let obj = create_test_obj();
+        let spec = TagSpecifier::Wildcard {
+            group: (0x6000, 0xFF00),
+            element: (0x0000, 0x0000),
+        };
+        assert!(
+            resolve_tags(&spec, &obj)
+                .expect("should resolve")
+                .is_empty(),
+            "no overlays present, nothing to remove"
+        );
     }
 }

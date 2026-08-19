@@ -1,0 +1,373 @@
+FORMAT dicom
+
+# Converted from DicomAnonymizer.script (CTP / RSNA Clinical Trial Processor).
+# Profile: CTP Clinical Trial Default, based on DICOM PS3.15 Annex E.
+#
+# Run with:  --var DATEINC -3210
+#   DATEINC is the date shift the source script declared. Every JITTER line
+#   below reads it. Change it per project; keep it stable across runs of one
+#   dataset or longitudinal date relationships break.
+#
+# Tags are written in (gggg,eeee) form rather than by keyword. The source
+# script's n="..." labels are CTP's own and do not all match DICOM standard
+# keywords (e.g. AcquisitionDatetime vs AcquisitionDateTime); an unresolvable
+# keyword makes every file fail to resolve and be skipped, whereas a tag
+# number always resolves. The CTP label is kept as a trailing comment.
+#
+# 287 rules, in the source script's tag order so this file can be
+# diffed against it.
+#
+# Handled outside this recipe:
+#   <r t="privategroups">  removal of private tags is automatic (r-3-12)
+#   <r t="unspecifiedelements"> was OFF, matching the default here: only tags
+#                          named below are touched
+#
+#   <r t="curves">    covered by REMOVE (50xx,xxxx) below
+#   <r t="overlays">  covered by REMOVE (60xx,xxxx) below
+#
+# The four <k> keep-group directives (0018, 0020, 0028, safeprivateelements)
+# were all disabled in the source, so nothing is lost by their absence.
+
+%header
+
+# --- Repeating groups (CTP <r t="overlays"> and <r t="curves">) ---------
+# Overlay planes are a classic hiding place for burned-in annotation, and
+# curve groups also carry audio. CTP removed both wholesale via its <r>
+# directives; these two lines are the equivalent. The x nibbles match the
+# full standard ranges 6000-60FF and 5000-50FF, so no plane can hide at a
+# high group number.
+#
+# These match on the whole tag, so they do NOT touch the Image Pixel
+# module: (0028,0010) Rows and (0028,0011) Columns are unaffected even
+# though OverlayRows/OverlayColumns share their element numbers.
+#
+# This also removes (60xx,1301-1303) ROIArea/ROIMean/ROIStandardDeviation.
+# If a researcher needs those, add explicit KEEP lines - KEEP outranks
+# REMOVE (r-3-11), so it protects individual tags from these blanket rules.
+REMOVE (60xx,xxxx)
+REMOVE (50xx,xxxx)
+
+KEEP (0008,0005)  # SpecificCharacterSet
+JITTER (0008,0012) var:DATEINC  # InstanceCreationDate
+REPLACE (0008,0014) func:hashuid  # InstanceCreatorUID
+KEEP (0008,0016)  # SOPClassUID
+REPLACE (0008,0018) func:hashuid  # SOPInstanceUID
+JITTER (0008,0020) var:DATEINC  # StudyDate
+JITTER (0008,0021) var:DATEINC  # SeriesDate
+JITTER (0008,0022) var:DATEINC  # AcquisitionDate
+JITTER (0008,0023) var:DATEINC  # ContentDate
+JITTER (0008,0024) var:DATEINC  # OverlayDate
+JITTER (0008,0025) var:DATEINC  # CurveDate
+JITTER (0008,002a) var:DATEINC  # AcquisitionDatetime
+KEEP (0008,0030)  # StudyTime
+KEEP (0008,0031)  # SeriesTime
+KEEP (0008,0032)  # AcquisitionTime
+KEEP (0008,0033)  # ContentTime
+KEEP (0008,0034)  # OverlayTime
+KEEP (0008,0035)  # CurveTime
+REPLACE (0008,0050) func:hashuid_ascii  # AccessionNumber
+REPLACE (0008,0058) func:hashuid  # FailedSOPInstanceUIDList
+KEEP (0008,0070)  # Manufacturer
+REMOVE (0008,0080)  # InstitutionName
+REMOVE (0008,0081)  # InstitutionAddress
+REMOVE (0008,0082)  # InstitutionCodeSeq
+BLANK (0008,0090)  # ReferringPhysicianName
+REMOVE (0008,0092)  # ReferringPhysicianAddress
+REMOVE (0008,0094)  # ReferringPhysicianPhoneNumbers
+REMOVE (0008,0096)  # ReferringPhysiciansIDSeq
+REPLACE (0008,010d) func:hashuid  # CodeSetExtensionCreatorUID
+REMOVE (0008,0201)  # TimezoneOffsetFromUTC
+REMOVE (0008,1010)  # StationName
+REMOVE (0008,1030)  # StudyDescription
+KEEP (0008,103e)  # SeriesDescription
+REMOVE (0008,1040)  # InstitutionalDepartmentName
+REMOVE (0008,1048)  # PhysicianOfRecord
+REMOVE (0008,1049)  # PhysicianOfRecordIdSeq
+REMOVE (0008,1050)  # PerformingPhysicianName
+REMOVE (0008,1052)  # PerformingPhysicianIdSeq
+REMOVE (0008,1060)  # NameOfPhysicianReadingStudy
+REMOVE (0008,1062)  # PhysicianReadingStudyIdSeq
+REMOVE (0008,1070)  # OperatorName
+REMOVE (0008,1072)  # OperatorsIdentificationSeq
+REMOVE (0008,1080)  # AdmittingDiagnosisDescription
+REMOVE (0008,1084)  # AdmittingDiagnosisCodeSeq
+KEEP (0008,1090)  # ManufacturerModelName
+REMOVE (0008,1110)  # RefStudySeq
+REMOVE (0008,1111)  # RefPPSSeq
+REMOVE (0008,1120)  # RefPatientSeq
+REMOVE (0008,1140)  # RefImageSeq
+KEEP (0008,1150)  # RefSOPClassUID
+REPLACE (0008,1155) func:hashuid  # RefSOPInstanceUID
+REPLACE (0008,1195) func:hashuid  # TransactionUID
+REMOVE (0008,2111)  # DerivationDescription
+REMOVE (0008,2112)  # SourceImageSeq
+REPLACE (0008,3010) func:hashuid  # IrradiationEventUID
+REMOVE (0008,4000)  # IdentifyingComments
+REPLACE (0008,9123) func:hashuid  # CreatorVersionUID
+REPLACE (0010,0010) func:hashuid_ascii  # PatientName
+REPLACE (0010,0020) func:hashuid_ascii  # PatientID
+REMOVE (0010,0021)  # IssuerOfPatientID
+BLANK (0010,0030)  # PatientBirthDate
+REMOVE (0010,0032)  # PatientBirthTime
+KEEP (0010,0040)  # PatientSex
+REMOVE (0010,0050)  # PatientInsurancePlanCodeSeq
+REMOVE (0010,0101)  # PatientPrimaryLanguageCodeSeq
+REMOVE (0010,0102)  # PatientPrimaryLanguageModifierCodeSeq
+REMOVE (0010,1000)  # OtherPatientIDs
+REMOVE (0010,1001)  # OtherPatientNames
+REMOVE (0010,1002)  # OtherPatientIDsSeq
+REMOVE (0010,1005)  # PatientBirthName
+KEEP (0010,1010)  # PatientAge
+KEEP (0010,1020)  # PatientSize
+KEEP (0010,1030)  # PatientWeight
+REMOVE (0010,1040)  # PatientAddress
+REMOVE (0010,1050)  # InsurancePlanIdentification
+REMOVE (0010,1060)  # PatientMotherBirthName
+REMOVE (0010,1080)  # MilitaryRank
+REMOVE (0010,1081)  # BranchOfService
+REMOVE (0010,1090)  # MedicalRecordLocator
+REMOVE (0010,2000)  # MedicalAlerts
+REMOVE (0010,2110)  # ContrastAllergies
+REMOVE (0010,2150)  # CountryOfResidence
+REMOVE (0010,2152)  # RegionOfResidence
+REMOVE (0010,2154)  # PatientPhoneNumbers
+REMOVE (0010,2155)  # PatientTelecomInformation
+KEEP (0010,2160)  # EthnicGroup
+REMOVE (0010,2180)  # Occupation
+KEEP (0010,21a0)  # SmokingStatus
+REMOVE (0010,21b0)  # AdditionalPatientHistory
+KEEP (0010,21c0)  # PregnancyStatus
+JITTER (0010,21d0) var:DATEINC  # LastMenstrualDate
+REMOVE (0010,21f0)  # PatientReligiousPreference
+KEEP (0010,2203)  # PatientSexNeutered
+REMOVE (0010,2297)  # ResponsiblePerson
+REMOVE (0010,2299)  # ResponsibleOrganization
+REMOVE (0010,4000)  # PatientComments
+REPLACE (0012,0062) YES  # PatientIdentityRemoved
+REPLACE (0012,0063) CTP Default: based on DICOM PS3.15 AnnexE. Details in 0012,0064  # DeIdentificationMethod
+REMOVE (0018,0010)  # ContrastBolusAgent
+KEEP (0018,0015)  # BodyPartExamined
+KEEP (0018,1000)  # DeviceSerialNumber
+KEEP (0018,1002)  # DeviceUID
+KEEP (0018,1004)  # PlateID
+KEEP (0018,1005)  # GeneratorID
+KEEP (0018,1007)  # CassetteID
+KEEP (0018,1008)  # GantryID
+JITTER (0018,1012) var:DATEINC  # DateOfSecondaryCapture
+KEEP (0018,1020)  # SoftwareVersion
+REMOVE (0018,1030)  # ProtocolName
+JITTER (0018,1078) var:DATEINC  # Radiopharmaceutical Start DateTime
+JITTER (0018,1079) var:DATEINC  # Radiopharmaceutical Stop DateTime
+JITTER (0018,1200) var:DATEINC  # DateOfLastCalibration
+REMOVE (0018,1400)  # AcquisitionDeviceProcessingDescription
+REMOVE (0018,4000)  # AcquisitionComments
+KEEP (0018,700a)  # DetectorID
+JITTER (0018,700c) var:DATEINC  # DateOfLastDetectorCalibration
+REMOVE (0018,9424)  # AcquisitionProtocolDescription
+REMOVE (0018,a003)  # ContributionDescription
+REPLACE (0020,000d) func:hashuid  # StudyInstanceUID
+REPLACE (0020,000e) func:hashuid  # SeriesInstanceUID
+BLANK (0020,0010)  # StudyID
+KEEP (0020,0013)  # InstanceNumber
+KEEP (0020,0032)  # ImagePosition
+REPLACE (0020,0052) func:hashuid  # FrameOfReferenceUID
+REPLACE (0020,0200) func:hashuid  # SynchronizationFrameOfReferenceUID
+REMOVE (0020,3401)  # ModifyingDeviceID
+REMOVE (0020,3404)  # ModifyingDeviceManufacturer
+REMOVE (0020,3406)  # ModifiedImageDescription
+REMOVE (0020,4000)  # ImageComments
+REMOVE (0020,9158)  # FrameComments
+REPLACE (0020,9161) func:hashuid  # ConcatenationUID
+REPLACE (0020,9164) func:hashuid  # DimensionOrganizationUID
+KEEP (0028,0301)  # BurnedInAnnotation
+REPLACE (0028,0303) MODIFIED  # LongitudinalTemporalInformationModified
+REPLACE (0028,1199) func:hashuid  # PaletteColorLUTUID
+REPLACE (0028,1214) func:hashuid  # LargePaletteColorLUTUid
+REMOVE (0028,4000)  # ImagePresentationComments
+REMOVE (0032,0012)  # StudyIDIssuer
+REMOVE (0032,0032)  # StudyVerifiedDate
+REMOVE (0032,0033)  # StudyVerifiedTime
+REMOVE (0032,0034)  # StudyReadDate
+REMOVE (0032,0035)  # StudyReadTime
+JITTER (0032,1000) var:DATEINC  # ScheduledStudyStartDate
+KEEP (0032,1001)  # ScheduledStudyStartTime
+JITTER (0032,1010) var:DATEINC  # ScheduledStudyStopDate
+KEEP (0032,1011)  # ScheduledStudyStopTime
+REMOVE (0032,1020)  # ScheduledStudyLocation
+REMOVE (0032,1021)  # ScheduledStudyLocationAET
+REMOVE (0032,1030)  # ReasonforStudy
+REMOVE (0032,1032)  # RequestingPhysician
+REMOVE (0032,1033)  # RequestingService
+JITTER (0032,1040) var:DATEINC  # StudyArrivalDate
+JITTER (0032,1050) var:DATEINC  # StudyCompletionDate
+REMOVE (0032,1060)  # RequestedProcedureDescription
+REMOVE (0032,1070)  # RequestedContrastAgent
+REMOVE (0032,4000)  # StudyComments
+REMOVE (0038,0004)  # RefPatientAliasSeq
+REMOVE (0038,0010)  # AdmissionID
+REMOVE (0038,0011)  # IssuerOfAdmissionID
+REMOVE (0038,001a)  # ScheduledAdmissionDate
+REMOVE (0038,001b)  # ScheduledAdmissionTime
+REMOVE (0038,001c)  # ScheduledDischargeDate
+REMOVE (0038,001d)  # ScheduledDischargeTime
+REMOVE (0038,001e)  # ScheduledPatientInstitutionResidence
+JITTER (0038,0020) var:DATEINC  # AdmittingDate
+KEEP (0038,0021)  # AdmittingTime
+JITTER (0038,0030) var:DATEINC  # DischargeDate
+KEEP (0038,0032)  # DischargeTime
+REMOVE (0038,0040)  # DischargeDiagnosisDescription
+REMOVE (0038,0050)  # SpecialNeeds
+REMOVE (0038,0060)  # ServiceEpisodeID
+REMOVE (0038,0061)  # IssuerOfServiceEpisodeId
+REMOVE (0038,0062)  # ServiceEpisodeDescription
+REMOVE (0038,0300)  # CurrentPatientLocation
+REMOVE (0038,0400)  # PatientInstitutionResidence
+REMOVE (0038,0500)  # PatientState
+REMOVE (0038,4000)  # VisitComments
+REMOVE (0040,0001)  # ScheduledStationAET
+JITTER (0040,0002) var:DATEINC  # SPSStartDate
+KEEP (0040,0003)  # SPSStartTime
+JITTER (0040,0004) var:DATEINC  # SPSEndDate
+KEEP (0040,0005)  # SPSEndTime
+REMOVE (0040,0006)  # ScheduledPerformingPhysicianName
+REMOVE (0040,0007)  # SPSDescription
+REMOVE (0040,000b)  # 
+REMOVE (0040,0010)  # ScheduledStationName
+REMOVE (0040,0011)  # SPSLocation
+REMOVE (0040,0012)  # PreMedication
+REMOVE (0040,0241)  # PerformedStationAET
+REMOVE (0040,0242)  # PerformedStationName
+REMOVE (0040,0243)  # PerformedLocation
+JITTER (0040,0244) var:DATEINC  # PPSStartDate
+KEEP (0040,0245)  # PPSStartTime
+JITTER (0040,0250) var:DATEINC  # PPSEndDate
+REMOVE (0040,0253)  # PPSID
+REMOVE (0040,0254)  # PPSDescription
+REMOVE (0040,0275)  # RequestAttributesSeq
+REMOVE (0040,0280)  # PPSComments
+REMOVE (0040,0555)  # AcquisitionContextSeq
+REMOVE (0040,1001)  # RequestedProcedureID
+REMOVE (0040,1004)  # PatientTransportArrangements
+REMOVE (0040,1005)  # RequestedProcedureLocation
+REMOVE (0040,1010)  # NamesOfIntendedRecipientsOfResults
+REMOVE (0040,1011)  # IntendedRecipientsOfResultsIDSequence
+REMOVE (0040,1101)  # PersonIdCodeSequence
+REMOVE (0040,1102)  # PersonAddress
+REMOVE (0040,1103)  # PersonTelephoneNumbers
+REMOVE (0040,1400)  # RequestedProcedureComments
+REMOVE (0040,2001)  # ReasonForTheImagingServiceRequest
+REMOVE (0040,2004)  # IssueDateOfImagingServiceRequest
+REMOVE (0040,2005)  # IssueTimeOfImagingServiceRequest
+REMOVE (0040,2008)  # OrderEnteredBy
+REMOVE (0040,2009)  # OrderEntererLocation
+REMOVE (0040,2010)  # OrderCallbackPhoneNumber
+BLANK (0040,2016)  # PlacerOrderNumber
+BLANK (0040,2017)  # FillerOrderNumber
+REMOVE (0040,2400)  # ImagingServiceRequestComments
+REMOVE (0040,3001)  # ConfidentialityPatientData
+REPLACE (0040,4023) func:hashuid  # RefGenPurposeSchedProcStepTransUID
+REMOVE (0040,4025)  # ScheduledStationNameCodeSeq
+REMOVE (0040,4027)  # ScheduledStationGeographicLocCodeSeq
+REMOVE (0040,4028)  # PerformedStationNameCodeSeq
+REMOVE (0040,4030)  # PerformedStationGeoLocCodeSeq
+REMOVE (0040,4034)  # ScheduledHumanPerformersSeq
+REMOVE (0040,4035)  # ActualHumanPerformersSequence
+REMOVE (0040,4036)  # HumanPerformersOrganization
+REMOVE (0040,4037)  # HumanPerformersName
+REMOVE (0040,a027)  # VerifyingOrganization
+REMOVE (0040,a030)  # VerificationDateTime
+REMOVE (0040,a032)  # ObservationDateTime
+REMOVE (0040,a073)  # VerifyingObserverSeq
+BLANK (0040,a075)  # VerifyingObserverName
+REMOVE (0040,a078)  # AuthorObserverSequence
+REMOVE (0040,a07a)  # ParticipantSequence
+REMOVE (0040,a07c)  # CustodialOrganizationSeq
+REMOVE (0040,a088)  # VerifyingObserverIdentificationCodeSeq
+REMOVE (0040,a120)  # DateTime
+REMOVE (0040,a121)  # Date
+REMOVE (0040,a122)  # Time
+BLANK (0040,a123)  # PersonName
+REPLACE (0040,a124) func:hashuid  # UID
+REMOVE (0040,a13a)  # RefDatetime
+REMOVE (0040,a730)  # ContentSeq
+REPLACE (0040,db0c) func:hashuid  # TemplateExtensionOrganizationUID
+REPLACE (0040,db0d) func:hashuid  # TemplateExtensionCreatorUID
+REMOVE (0060,3000)  # OverlayData
+REMOVE (0060,4000)  # OverlayComments
+REMOVE (0070,0001)  # GraphicAnnotationSequence
+BLANK (0070,0084)  # ContentCreatorsName
+REMOVE (0070,0086)  # ContentCreatorsIdCodeSeq
+REPLACE (0070,031a) func:hashuid  # FiducialUID
+REPLACE (0088,0140) func:hashuid  # StorageMediaFilesetUID
+REMOVE (0088,0200)  # IconImageSequence
+REMOVE (0088,0904)  # TopicTitle
+REMOVE (0088,0906)  # TopicSubject
+REMOVE (0088,0910)  # TopicAuthor
+REMOVE (0088,0912)  # TopicKeyWords
+REMOVE (0400,0100)  # DigitalSignatureUID
+REMOVE (0400,0402)  # RefDigitalSignatureSeq
+REMOVE (0400,0403)  # RefSOPInstanceMACSeq
+REMOVE (0400,0404)  # MAC
+REMOVE (0400,0550)  # ModifiedAttributesSequence
+REMOVE (0400,0561)  # OriginalAttributesSequence
+REMOVE (2030,0020)  # TextString
+JITTER (3006,0008) var:DATEINC  # StructureSetDate
+REPLACE (3006,0024) func:hashuid  # ReferencedFrameOfReferenceUID
+REPLACE (3006,00c2) func:hashuid  # RelatedFrameOfReferenceUID
+REPLACE (300a,0013) func:hashuid  # DoseReferenceUID
+REMOVE (300e,0008)  # ReviewerName
+REMOVE (4000,0010)  # Arbitrary
+REMOVE (4000,4000)  # TextComments
+REMOVE (4008,0042)  # ResultsIDIssuer
+REMOVE (4008,0102)  # InterpretationRecorder
+REMOVE (4008,010a)  # InterpretationTranscriber
+REMOVE (4008,010b)  # InterpretationText
+REMOVE (4008,010c)  # InterpretationAuthor
+REMOVE (4008,0111)  # InterpretationApproverSequence
+REMOVE (4008,0114)  # PhysicianApprovingInterpretation
+REMOVE (4008,0115)  # InterpretationDiagnosisDescription
+REMOVE (4008,0118)  # ResultsDistributionListSeq
+REMOVE (4008,0119)  # DistributionName
+REMOVE (4008,011a)  # DistributionAddress
+REMOVE (4008,0202)  # InterpretationIdIssuer
+REMOVE (4008,0300)  # Impressions
+REMOVE (4008,4000)  # ResultComments
+REMOVE (fffa,fffa)  # DigitalSignaturesSeq
+REMOVE (fffc,fffc)  # DataSetTrailingPadding
+
+# Rules needing review
+#
+#   (0008,0050) AccessionNumber
+#     CTP: @hash(this,16)
+#     CTP digest/length differs from func:hashuid_ascii (24-char base32)
+#   (0010,0010) PatientName
+#     CTP: @hashname(this,6,2)
+#     CTP digest/length differs from func:hashuid_ascii (24-char base32)
+#   (0010,0020) PatientID
+#     CTP: @hash(this,10)
+#     CTP digest/length differs from func:hashuid_ascii (24-char base32)
+#   (0012,0063) DeIdentificationMethod
+#     CTP: @always()@append(){CTP Default:  based on DICOM PS3.15 AnnexE. Details in 0012,0064}
+#     CTP appends to any existing value; REPLACE overwrites it
+#   (0012,0064) DeIdentificationMethodCodeSeq
+#     CTP: 113100/113105/113107/113108/113109
+#     OMITTED - CTP builds a code sequence here; no sequence-construction action exists in this recipe format
+#   (0054,0016) RadiopharmaceuticalInformationSeq
+#     CTP: @always()@process()
+#     OMITTED - @process() recurses into the sequence; this program already applies every action recursively (r-3-13)
+#
+# Disabled in the source script (en="F"), therefore not converted:
+#
+#   (0008,0060) Modality                                   @require()
+#   (0008,010c) PrivateCodingSchemeCreatorUID              @hashuid(@UIDROOT,this)
+#   (0012,0010) ClinicalTrialSponsorName                   @param(@TRIALSPONSOR)
+#   (0012,0030) ClinicalTrialSiteID                        @param(@SITEID)
+#   (0012,0031) ClinicalTrialSiteName                      @param(@SITENAME)
+#   (0012,0040) ClinicalTrialSubjectID                     @hashptid(@SITEID,PatientID)
+#   (0013,0010) BlockOwner                                 CTP
+#   (0013,1010) ProjectName                                @param(@PROJECTNAME)
+#   (0013,1011) TrialName                                  @param(@TRIALNAME)
+#   (0013,1012) SiteName                                   @param(@SITENAME)
+#   (0013,1013) SiteID                                     @param(@SITEID)
+#   (0038,1234) ReferencedPatientAliasSeq                  @remove()
+#   (0040,a504) ContentTemplateSeq                         @process()
