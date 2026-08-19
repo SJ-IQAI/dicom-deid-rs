@@ -202,8 +202,16 @@ impl DeidPipeline {
             DeidError::Dicom(format!("failed to open {}: {}", file_path.display(), e))
         })?;
 
-        // Check blacklist
-        if let Some(reason) = self.filter_index.blacklist_reason(&obj) {
+        // Check blacklist, unless an allowlist rule exempts this file (r-5-2).
+        //
+        // The exemption stops here: it suppresses *rejection* only. Masking and
+        // header de-identification below still run, because a device whitelist
+        // exists precisely to admit devices that carry burned-in PHI and leave
+        // the graylist to mask it. Short-circuiting past the next two blocks
+        // would emit that PHI.
+        if !self.filter_index.is_allowlisted(&obj)
+            && let Some(reason) = self.filter_index.blacklist_reason(&obj)
+        {
             return Ok(FileOutcome::Blacklisted(reason.to_string()));
         }
 

@@ -24,6 +24,13 @@ pub struct FilterSection {
 pub enum FilterType {
     Graylist,
     Blacklist,
+    /// Exempts a matching file from every blacklist rule (r-2-10-3).
+    ///
+    /// This is only an exemption from rejection: masking and header actions
+    /// still apply. CTP's device whitelists deliberately admit devices that
+    /// carry burned-in PHI, relying on the pixel scrubber to mask it, so an
+    /// allowlist match must never be read as "emit this file untouched".
+    Allowlist,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -51,13 +58,39 @@ pub enum LogicalOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Predicate {
-    Contains { field: String, value: String },
-    NotContains { field: String, value: String },
-    Equals { field: String, value: String },
-    NotEquals { field: String, value: String },
-    Missing { field: String },
-    Empty { field: String },
-    Present { field: String },
+    Contains {
+        field: String,
+        value: String,
+    },
+    NotContains {
+        field: String,
+        value: String,
+    },
+    Equals {
+        field: String,
+        value: String,
+    },
+    NotEquals {
+        field: String,
+        value: String,
+    },
+    Missing {
+        field: String,
+    },
+    Empty {
+        field: String,
+    },
+    Present {
+        field: String,
+    },
+    /// Absent *or* empty (r-2-6-9), the CTP `Tag.equals("")` convention.
+    Blank {
+        field: String,
+    },
+    /// Present and non-empty (r-2-6-10), the CTP `!Tag.equals("")` convention.
+    NotBlank {
+        field: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -156,11 +189,13 @@ impl TagSpecifier {
 const PREDICATE_KEYWORDS: &[&str] = &[
     "notcontains",
     "notequals",
+    "notblank",
     "contains",
     "equals",
     "missing",
     "empty",
     "present",
+    "blank",
 ];
 
 struct Parser {
@@ -345,6 +380,7 @@ fn parse_filter_type(s: &str) -> Result<FilterType, DeidError> {
     match s {
         "graylist" => Ok(FilterType::Graylist),
         "blacklist" => Ok(FilterType::Blacklist),
+        "allowlist" => Ok(FilterType::Allowlist),
         _ => Err(DeidError::RecipeParse(format!(
             "unknown filter type: {}",
             s
@@ -536,6 +572,14 @@ fn parse_predicate(text: &str) -> Result<Predicate, DeidError> {
         })
     } else if let Some(rest) = text.strip_prefix("present ") {
         Ok(Predicate::Present {
+            field: rest.trim().to_string(),
+        })
+    } else if let Some(rest) = text.strip_prefix("notblank ") {
+        Ok(Predicate::NotBlank {
+            field: rest.trim().to_string(),
+        })
+    } else if let Some(rest) = text.strip_prefix("blank ") {
+        Ok(Predicate::Blank {
             field: rest.trim().to_string(),
         })
     } else {
@@ -1471,5 +1515,148 @@ missing Modality
         assert_eq!(private.matches(Tag(0x0013, 0x1010)), None);
 
         assert_eq!(TagSpecifier::Pattern(".*".into()).matches(Tag(0, 0)), None);
+    }
+
+    /// Requirement r-2-3, r-2-10-3
+    #[test]
+    fn r2_3_parse_filter_allowlist_section() {
+        let input = "\
+FORMAT dicom
+
+%filter allowlist
+
+LABEL Admit validated Aloka US
+equals Modality US
+  + contains Manufacturer Aloka
+";
+        let recipe = Recipe::parse(input).expect("should parse");
+        assert_eq!(recipe.filters.len(), 1);
+        assert_eq!(recipe.filters[0].filter_type, FilterType::Allowlist);
+        assert_eq!(recipe.filters[0].labels.len(), 1);
+        assert_eq!(recipe.filters[0].labels[0].conditions.len(), 2);
+    }
+
+    /// Requirement r-2-3: a recipe may carry all three filter types at once,
+    /// which is how a converted CTP filter script is expressed.
+    #[test]
+    fn r2_3_parse_all_three_filter_types_in_one_recipe() {
+        let input = "\
+FORMAT dicom
+
+%filter allowlist
+
+LABEL Admit Aloka
+contains Manufacturer Aloka
+
+%filter blacklist
+
+LABEL Reject US
+contains Modality US
+
+%filter graylist
+
+LABEL Mask GE dose report
+contains Manufacturer GE MEDICAL
+ctpcoordinates 0,0,512,110
+";
+        let recipe = Recipe::parse(input).expect("should parse");
+        let types: Vec<_> = recipe.filters.iter().map(|f| f.filter_type).collect();
+        assert_eq!(
+            types,
+            vec![
+                FilterType::Allowlist,
+                FilterType::Blacklist,
+                FilterType::Graylist
+            ]
+        );
+        assert_eq!(recipe.filters[2].labels[0].coordinates.len(), 1);
+    }
+
+    /// Requirement r-2-6-9, r-2-6-10
+    #[test]
+    fn r2_6_9_parse_blank_and_notblank_predicates() {
+        let input = "\
+FORMAT dicom
+
+%filter blacklist
+
+LABEL Blank image type
+blank ImageType
+
+LABEL Converted image
+notblank ConversionType
+";
+        let recipe = Recipe::parse(input).expect("should parse");
+        let labels = &recipe.filters[0].labels;
+        assert_eq!(
+            labels[0].conditions[0].predicate,
+            Predicate::Blank {
+                field: "ImageType".into()
+            }
+        );
+        assert_eq!(
+            labels[1].conditions[0].predicate,
+            Predicate::NotBlank {
+                field: "ConversionType".into()
+            }
+        );
+    }
+
+    /// Requirement r-2-6-11: a `::` qualified field survives parsing intact,
+    /// including when it carries an inline operator around it (r-2-7-3).
+    #[test]
+    fn r2_6_11_parse_sequence_qualified_field() {
+        let input = "\
+FORMAT dicom
+
+%filter allowlist
+
+LABEL Aloka real image
+contains Manufacturer Aloka
+  + notblank SequenceOfUltrasoundRegions::RegionDataType || missing Manufacturer
+";
+        let recipe = Recipe::parse(input).expect("should parse");
+        let conditions = &recipe.filters[0].labels[0].conditions;
+        assert_eq!(conditions.len(), 3);
+        assert_eq!(
+            conditions[1].predicate,
+            Predicate::NotBlank {
+                field: "SequenceOfUltrasoundRegions::RegionDataType".into()
+            }
+        );
+        assert_eq!(conditions[1].operator, LogicalOp::And);
+        assert_eq!(conditions[2].operator, LogicalOp::Or);
+    }
+
+    /// Requirement r-2-6-10: `notblank` must not be mistaken for a value
+    /// fragment when it follows an inline operator, and a value that merely
+    /// starts with a predicate keyword must still be treated as a value.
+    #[test]
+    fn r2_6_10_notblank_keyword_recognised_inline() {
+        let input = "\
+FORMAT dicom
+
+%filter blacklist
+
+LABEL Mixed
+contains ManufacturerModelName blanket + notblank ConversionType
+";
+        let recipe = Recipe::parse(input).expect("should parse");
+        let conditions = &recipe.filters[0].labels[0].conditions;
+        assert_eq!(conditions.len(), 2);
+        assert_eq!(
+            conditions[0].predicate,
+            Predicate::Contains {
+                field: "ManufacturerModelName".into(),
+                value: "blanket".into()
+            },
+            "a value beginning with a predicate keyword must stay part of the value"
+        );
+        assert_eq!(
+            conditions[1].predicate,
+            Predicate::NotBlank {
+                field: "ConversionType".into()
+            }
+        );
     }
 }

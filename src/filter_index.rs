@@ -65,6 +65,7 @@ struct ModalityDispatchTree {
 pub struct FilterIndex {
     blacklist_labels: Vec<CompiledLabel>,
     graylist_tree: ModalityDispatchTree,
+    allowlist_tree: ModalityDispatchTree,
 }
 
 impl FilterIndex {
@@ -72,6 +73,7 @@ impl FilterIndex {
     pub fn new(recipe: &Recipe) -> Self {
         let mut blacklist_labels = Vec::new();
         let mut graylist_labels = Vec::new();
+        let mut allowlist_labels = Vec::new();
 
         for section in &recipe.filters {
             for label in &section.labels {
@@ -82,16 +84,39 @@ impl FilterIndex {
                     FilterType::Graylist => {
                         graylist_labels.push(label);
                     }
+                    FilterType::Allowlist => {
+                        allowlist_labels.push(label);
+                    }
                 }
             }
         }
 
         let graylist_tree = build_dispatch_tree(graylist_labels);
+        // Allowlists are large (CTP device whitelists run to four figures of
+        // labels) and keyed on the same Modality/Manufacturer fields, so they
+        // get the same dispatch treatment as graylists.
+        let allowlist_tree = build_dispatch_tree(allowlist_labels);
 
         FilterIndex {
             blacklist_labels,
             graylist_tree,
+            allowlist_tree,
         }
+    }
+
+    /// Whether any allowlist filter exempts this object from the blacklist.
+    ///
+    /// Exempts the object from every blacklist rule and nothing else — masking
+    /// and header actions still apply (r-2-10-3).
+    ///
+    /// Deliberately returns a bool rather than the matching label's name:
+    /// [`dispatch_candidates`] walks hash maps, so "the first match" is not a
+    /// stable notion here. Use [`crate::filter::allowlist_exemption`] when the
+    /// name is wanted; it evaluates in recipe order.
+    pub fn is_allowlisted(&self, obj: &InMemDicomObject) -> bool {
+        dispatch_candidates(&self.allowlist_tree, obj)
+            .into_iter()
+            .any(|label| evaluate_compiled_conditions(&label.conditions, &label.skip_indices, obj))
     }
 
     /// Return the name of the first matching blacklist label, or `None`.
@@ -479,6 +504,10 @@ fn evaluate_predicate_compiled(condition: &CompiledCondition, obj: &InMemDicomOb
             Err(_) => false,
         },
         Predicate::Present { field } => obj.element_by_name(field).is_ok(),
+        // Shared with the direct evaluator rather than reimplemented, so the
+        // two cannot drift apart (r-2-6-8).
+        Predicate::Blank { field } => crate::filter::field_is_blank(obj, field),
+        Predicate::NotBlank { field } => !crate::filter::field_is_blank(obj, field),
     }
 }
 
@@ -1095,6 +1124,136 @@ mod tests {
                 indexed, direct,
                 "index and direct evaluation disagree for {:?}",
                 predicate
+            );
+        }
+    }
+
+    /// Requirement r-2-6-8: the predicates added for CTP filter scripts must
+    /// evaluate identically through the index and directly.
+    #[test]
+    fn r2_6_8_index_agrees_on_blank_notblank_and_sequence_fields() {
+        let seq_field = "SequenceOfUltrasoundRegions::RegionDataType";
+
+        // An object per shape a field can take: populated, present but empty,
+        // absent, plus the sequence-qualified equivalents.
+        let mut populated = create_test_obj();
+        put_str(&mut populated, tags::MODALITY, VR::CS, "US");
+        put_str(&mut populated, tags::CONVERSION_TYPE, VR::CS, "WSD");
+
+        let mut empty_valued = create_test_obj();
+        put_str(&mut empty_valued, tags::MODALITY, VR::CS, "US");
+        put_empty(&mut empty_valued, tags::CONVERSION_TYPE, VR::CS);
+
+        let mut absent = create_test_obj();
+        put_str(&mut absent, tags::MODALITY, VR::CS, "US");
+
+        let mut with_regions = create_test_obj();
+        put_str(&mut with_regions, tags::MODALITY, VR::CS, "US");
+        let mut region = create_test_obj();
+        put_u16(&mut region, tags::REGION_DATA_TYPE, VR::US, 3);
+        put_sequence(
+            &mut with_regions,
+            tags::SEQUENCE_OF_ULTRASOUND_REGIONS,
+            vec![region],
+        );
+
+        let objects = [
+            (&populated, "populated"),
+            (&empty_valued, "present but empty"),
+            (&absent, "absent"),
+            (&with_regions, "sequence present"),
+        ];
+        let predicates = [
+            Predicate::Blank {
+                field: "ConversionType".into(),
+            },
+            Predicate::NotBlank {
+                field: "ConversionType".into(),
+            },
+            Predicate::Blank {
+                field: seq_field.into(),
+            },
+            Predicate::NotBlank {
+                field: seq_field.into(),
+            },
+            Predicate::Empty {
+                field: "ConversionType".into(),
+            },
+            Predicate::Present {
+                field: "ConversionType".into(),
+            },
+        ];
+
+        for (obj, obj_label) in objects {
+            for predicate in &predicates {
+                let recipe = graylist_with(predicate.clone());
+                let indexed = !FilterIndex::new(&recipe)
+                    .get_graylist_regions(obj)
+                    .is_empty();
+                let direct = crate::filter::matches_label(&recipe.filters[0].labels[0], obj);
+                assert_eq!(
+                    indexed, direct,
+                    "index and direct evaluation disagree for {predicate:?} on {obj_label}"
+                );
+            }
+        }
+    }
+
+    /// Requirement r-2-6-8, r-2-10-3: allowlist evaluation must agree between
+    /// the index and the direct evaluator.
+    #[test]
+    fn r2_10_3_index_agrees_with_direct_allowlist_evaluation() {
+        let recipe = Recipe {
+            format: "dicom".into(),
+            header: vec![],
+            filters: vec![FilterSection {
+                filter_type: FilterType::Allowlist,
+                labels: vec![
+                    FilterLabel {
+                        name: "GE SIGNA".into(),
+                        conditions: vec![
+                            Condition {
+                                operator: LogicalOp::First,
+                                predicate: contains("Manufacturer", "^GE MEDICAL"),
+                            },
+                            Condition {
+                                operator: LogicalOp::And,
+                                predicate: equals("Modality", "PT"),
+                            },
+                        ],
+                        coordinates: vec![],
+                    },
+                    FilterLabel {
+                        name: "Aloka US".into(),
+                        conditions: vec![Condition {
+                            operator: LogicalOp::First,
+                            predicate: contains("Manufacturer", "Aloka"),
+                        }],
+                        coordinates: vec![],
+                    },
+                ],
+            }],
+        };
+
+        let mut aloka = create_test_obj();
+        put_str(&mut aloka, tags::MANUFACTURER, VR::LO, "Aloka Co Ltd");
+        put_str(&mut aloka, tags::MODALITY, VR::CS, "US");
+
+        let mut unlisted = create_test_obj();
+        put_str(&mut unlisted, tags::MANUFACTURER, VR::LO, "ATL");
+        put_str(&mut unlisted, tags::MODALITY, VR::CS, "US");
+
+        let index = FilterIndex::new(&recipe);
+        for (obj, label) in [
+            (&ge_pt_object(), "GE PT"),
+            (&aloka, "Aloka US"),
+            (&unlisted, "ATL US"),
+            (&create_test_obj(), "empty object"),
+        ] {
+            assert_eq!(
+                index.is_allowlisted(obj),
+                crate::filter::is_allowlisted(&recipe, obj),
+                "index and direct allowlist evaluation disagree for {label}"
             );
         }
     }

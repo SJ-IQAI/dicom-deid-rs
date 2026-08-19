@@ -26,6 +26,9 @@ r-2-6-4 The software must support the filter predicate "notequals <Field> <Value
 r-2-6-5 The software must support the filter predicate "missing <Field>" which checks that the field is not present in the DICOM.
 r-2-6-6 The software must support the filter predicate "empty <Field>" which checks that the field is present but has an empty value.
 r-2-6-7 The software must support the filter predicate "present <Field>" which checks that the field exists.
+r-2-6-9 The software must support the filter predicate "blank <Field>" which is true when the field is absent *or* present with an empty value. This is the convention CTP filter scripts use for `Tag.equals("")`: a script cannot distinguish an absent element from a present-but-empty one, since both read as the empty string. It is deliberately distinct from "empty" (r-2-6-6), which requires the element to be present; converting a CTP `equals("")` test to "empty" would silently stop matching files that omit the tag altogether, and where such a test drives a rejection rule that failure is unsafe.
+r-2-6-10 The software must support the filter predicate "notblank <Field>" which is true when the field is present and carries a non-empty value, the exact negation of r-2-6-9 and the equivalent of CTP's `!Tag.equals("")`. It must not be confused with "present" (r-2-6-7), which is also true for a present-but-empty element.
+r-2-6-11 Filter predicate fields must support a `::` qualifier to address elements nested inside a sequence, e.g. `SequenceOfUltrasoundRegions::RegionDataType`, matching CTP's `Seq::Element` filter syntax. Resolution must search the named sequence's items in order and take the first item that carries the element. Qualifiers must nest, so `A::B::C` reaches two levels down. A field naming an absent sequence, a sequence with no items, or an element absent from every item must resolve as missing, which for the predicates above means a `::` field behaves exactly as a top-level field does when absent. Without this, an unresolvable field never matches, which silently disables every rule that depends on it.
 r-2-6-8 Filter predicate semantics must not be altered by any internal indexing or dispatch optimisation: evaluating a label through the filter index must give the same result as evaluating it directly. In particular, `contains` must remain a regex match (r-2-6-1) and `equals` must remain an exact match (r-2-6-3) on every field, including Modality and Manufacturer, which the dispatch tree buckets by literal substring. A dispatch lookup may stand in for a condition only when it is exactly equivalent to evaluating that condition; otherwise it may narrow the candidate set but the condition must still be evaluated.
 r-2-7 Logical operators in filter conditions
 r-2-7-1 The software must support the + prefix on a filter line to indicate an AND relationship with the preceding condition.
@@ -44,6 +47,7 @@ r-2-9-3 Header action values must support function references via func:<name> sy
 r-2-10 Named filter types
 r-2-10-1 The software must support "graylist" filters, which flag matching files and apply pixel masking based on the filter group's coordinate directives.
 r-2-10-2 The software must support "blacklist" filters, which exclude matching files from the output entirely.
+r-2-10-3 The software must support "allowlist" filters, which exempt a matching file from every blacklist rule (r-5-2). The exemption must suppress rejection and nothing else: an allowlisted file must still have graylist masking (r-2-10-1) and all header actions (r-3) applied to it. This is what makes an allowlist usable the way CTP device whitelists are used — they admit specific devices that are *known* to carry burned-in PHI, on the understanding that the pixel masking rules will remove it, so treating an allowlist match as "emit this file unmodified" would publish that PHI. A recipe declaring no allowlist section must exempt nothing, leaving blacklist behavior unchanged.
 
 r-3 Metadata De-identification
 r-3-1 The software must support adding a DICOM tag with a defined value
@@ -86,6 +90,7 @@ r-4-8 After decompressing and masking pixel data, the output must be stored as u
 
 r-5 File Filtering
 r-5-1 The software must support excluding DICOM files from processing entirely based on %filter blacklist rules. Files matching blacklist criteria must not appear in the output.
+r-5-2 A file matching any %filter allowlist rule must be exempt from blacklist exclusion (r-2-10-3) and must appear in the output, de-identified. Allowlist evaluation must therefore precede blacklist evaluation. This ordering is what lets a recipe express a broad rejection rule alongside narrow exceptions to it — the structure every CTP institutional filter script uses, where a whitelist of validated devices is admitted through an otherwise blanket rejection of their modality or image type.
 
 r-6 Embeddability
 r-6-1 The software must be designed as a library, with the main rust entrypoint being a command-line interface to the library.
