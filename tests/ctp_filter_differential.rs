@@ -31,7 +31,7 @@ use dicom_object::InMemDicomObject;
 use dicom_deid_rs::filter_index::FilterIndex;
 use dicom_deid_rs::recipe::Recipe;
 
-const RECIPE_PATH: &str = "ctp_filter.txt";
+const RECIPE_PATH: &str = "ctp_pixel_deid.txt";
 const VECTORS_PATH: &str = "tests/fixtures/ctp_filter_vectors.tsv";
 
 /// How many disagreements to print before truncating the failure message.

@@ -16,7 +16,7 @@ use dicom_object::InMemDicomObject;
 use dicom_deid_rs::filter_index::FilterIndex;
 use dicom_deid_rs::recipe::Recipe;
 
-const RECIPE_PATH: &str = "ctp_filter.txt";
+const RECIPE_PATH: &str = "ctp_pixel_deid.txt";
 
 fn index() -> FilterIndex {
     let text = std::fs::read_to_string(RECIPE_PATH).expect("generated recipe must be readable");

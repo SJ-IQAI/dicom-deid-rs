@@ -18,7 +18,7 @@ use regex::Regex;
 
 use dicom_deid_rs::recipe::{FilterType, Predicate, Recipe};
 
-const RECIPE_PATH: &str = "ctp_filter.txt";
+const RECIPE_PATH: &str = "ctp_pixel_deid.txt";
 
 fn load() -> Recipe {
     let text = std::fs::read_to_string(RECIPE_PATH).unwrap_or_else(|e| {
