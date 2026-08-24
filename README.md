@@ -64,22 +64,26 @@ SHA-256, equivalent to an empty salt.
 ### PatientID mapper
 
 When a site has already assigned study identifiers out of band, `--mapper`
-substitutes them and leaves everything else alone:
+supplies them:
 
 ```
-dicom-deid-rs ./input ./output --mapper ./keys/ids.csv
+dicom-deid-rs ./input ./output recipe.txt --mapper ./keys/ids.csv
 ```
 
-This is a distinct mode, not an extra recipe action. The **only** change made
-to the data set is PatientID (0010,0020); no recipe actions, filters, pixel
-masking, or private tag removal run, so the recipe argument becomes optional
-and is ignored if supplied. File Meta Information de-identification still
-applies, since it is unconditional for every written file.
+`--mapper` overrides the recipe for **exactly one tag**. PatientID
+(0010,0020) takes its value from the mapper; everything else the recipe does
+— filters, pixel masking, every other header action, private tag removal —
+runs exactly as it would without a mapper. Without `--mapper`, the recipe
+governs PatientID as it always has.
+
+The override is applied after the recipe's actions, so it wins whatever the
+recipe did to PatientID, including a `REMOVE` — the mapper puts the tag back.
+The original PatientID is looked up *before* the recipe runs, since the recipe
+is what changes the value being looked up.
 
 A file whose PatientID is missing, empty, or absent from the mapper is
-reported and counted as skipped — never written. The substitution is the only
-protection applied in this mode, so passing such a file through would emit the
-original identifier.
+reported and counted as skipped — never written — so no file is emitted
+carrying an unmapped identifier.
 
 CSV takes the original PatientID in the first column and the replacement in
 the second. A header row naming the columns is recognized and skipped, and
@@ -343,8 +347,8 @@ println!("Processed: {}, Blacklisted: {}", report.files_processed, report.files_
 
 Custom functions can be supplied via `config.functions` to extend the recipe with application-specific logic.
 
-Mapper mode has its own constructors, since it replaces the recipe rather than
-supplementing it. `recipe_path` is not read. The mapper can come from a file or
+A PatientID mapper is layered over the same config; the recipe at
+`config.recipe_path` still runs in full. The mapper can come from a file or
 from pairs already in memory, with the same validation either way:
 
 ```rust
@@ -353,11 +357,11 @@ use dicom_deid_rs::pipeline::DeidPipeline;
 use std::path::Path;
 
 // From a .csv or .json file...
-let pipeline = DeidPipeline::from_mapper_file(Path::new("./keys/ids.csv"), config).unwrap();
+let pipeline = DeidPipeline::with_mapper_file(config, Path::new("./keys/ids.csv")).unwrap();
 
 // ...or from pairs the caller already holds.
 let mapper = PatientIdMapper::from_pairs([("MRN0012345", "ANON-0001")]).unwrap();
-let pipeline = DeidPipeline::from_mapper(mapper, config).unwrap();
+let pipeline = DeidPipeline::with_mapper(config, mapper).unwrap();
 ```
 
 ## Building

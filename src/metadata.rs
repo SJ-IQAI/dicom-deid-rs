@@ -1,6 +1,6 @@
 use crate::error::DeidError;
 use crate::functions;
-use crate::recipe::{ActionType, ActionValue, HeaderAction};
+use crate::recipe::{ActionType, ActionValue, HeaderAction, TagSpecifier};
 use crate::tag::resolve_tags;
 use chrono::NaiveDate;
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
@@ -10,6 +10,7 @@ use dicom_core::{DataElement, Tag, VR};
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_dictionary_std::tags;
 use dicom_object::{DefaultDicomObject, InMemDicomObject};
+use regex::Regex;
 use std::collections::HashMap;
 
 /// A function that can be referenced via `func:<name>` in a recipe.
@@ -25,6 +26,26 @@ pub type DeidFunction = Box<dyn Fn(&str) -> Result<String, DeidError>>;
 ///
 /// When multiple actions target the same tag, the highest-precedence action wins.
 pub fn apply_header_actions(
+    actions: &[HeaderAction],
+    variables: &HashMap<String, String>,
+    functions: &HashMap<String, DeidFunction>,
+    obj: &mut InMemDicomObject,
+) -> Result<(), DeidError> {
+    apply_actions_at_top_level(actions, variables, functions, obj)?;
+
+    // Sequence items are handled through an index built once per file
+    // rather than by re-running the full rule list against every item:
+    // ultrasound files carry thousands of items, and per-item rule
+    // resolution made processing scale with items x rules. Within items
+    // the actions modify existing elements only (r-3-13) — an absent
+    // element holds no PHI, so creating one there protects nothing.
+    let index = NestedActionIndex::build(actions)?;
+    apply_to_nested_sequences(&index, variables, functions, obj)
+}
+
+/// Apply the actions to the top level of a data set, where REPLACE,
+/// ADD, and BLANK create the element when it is absent.
+fn apply_actions_at_top_level(
     actions: &[HeaderAction],
     variables: &HashMap<String, String>,
     functions: &HashMap<String, DeidFunction>,
@@ -64,64 +85,282 @@ pub fn apply_header_actions(
                 }
             }
             ActionType::Replace => {
-                let value = resolve_value(&action.value, variables, functions, obj, *tag)?;
-                let vr = lookup_vr(obj, *tag);
-                obj.put(DataElement::new(
-                    *tag,
-                    vr,
-                    Value::Primitive(PrimitiveValue::from(value.as_str())),
-                ));
+                apply_replace(action, variables, functions, obj, *tag)?;
             }
             ActionType::Jitter => {
-                let days_str = resolve_value(&action.value, variables, functions, obj, *tag)?;
-                let days: i64 = days_str
-                    .parse()
-                    .map_err(|_| DeidError::Dicom(format!("invalid jitter value: {}", days_str)))?;
-                let elem = match obj.element(*tag) {
-                    Ok(e) => e,
-                    Err(_) => continue, // tag absent — nothing to jitter
-                };
-                let current = elem
-                    .value()
-                    .to_str()
-                    .map_err(|e| DeidError::Dicom(format!("cannot read date for jitter: {}", e)))?;
-                let trimmed = current.trim();
-                // Blank/empty dates are a no-op
-                if trimmed.is_empty() {
-                    continue;
-                }
-                // Extract date portion (first 8 chars) and any time suffix (DT format)
-                let (date_part, time_suffix) = if trimmed.len() > 8 {
-                    (&trimmed[..8], &trimmed[8..])
-                } else {
-                    (trimmed, "")
-                };
-                let date = NaiveDate::parse_from_str(date_part, "%Y%m%d")
-                    .map_err(|e| DeidError::Dicom(format!("invalid date for jitter: {}", e)))?;
-                let shifted = date + chrono::Duration::days(days);
-                let vr = lookup_vr(obj, *tag);
-                let formatted = format!("{}{}", shifted.format("%Y%m%d"), time_suffix);
-                obj.put(DataElement::new(
-                    *tag,
-                    vr,
-                    Value::Primitive(PrimitiveValue::from(formatted.as_str())),
-                ));
+                apply_jitter(action, variables, functions, obj, *tag)?;
             }
             ActionType::Remove => {
                 let _ = obj.remove_element(*tag);
             }
             ActionType::Blank => {
-                let vr = lookup_vr(obj, *tag);
-                obj.put(DataElement::new(
-                    *tag,
-                    vr,
-                    Value::Primitive(PrimitiveValue::from("")),
-                ));
+                apply_blank(obj, *tag);
             }
         }
     }
 
-    // Recurse into sequence elements
+    Ok(())
+}
+
+/// Overwrite `tag` with the action's resolved value, creating the
+/// element when it is absent (top level only; the nested pass calls
+/// this exclusively for elements that exist).
+fn apply_replace(
+    action: &HeaderAction,
+    variables: &HashMap<String, String>,
+    functions: &HashMap<String, DeidFunction>,
+    obj: &mut InMemDicomObject,
+    tag: Tag,
+) -> Result<(), DeidError> {
+    let value = resolve_value(&action.value, variables, functions, obj, tag)?;
+    let vr = lookup_vr(obj, tag);
+    obj.put(DataElement::new(
+        tag,
+        vr,
+        Value::Primitive(PrimitiveValue::from(value.as_str())),
+    ));
+    Ok(())
+}
+
+/// Shift the date in `tag` by the action's resolved day count. An
+/// absent or blank element is a no-op.
+fn apply_jitter(
+    action: &HeaderAction,
+    variables: &HashMap<String, String>,
+    functions: &HashMap<String, DeidFunction>,
+    obj: &mut InMemDicomObject,
+    tag: Tag,
+) -> Result<(), DeidError> {
+    let days_str = resolve_value(&action.value, variables, functions, obj, tag)?;
+    let days: i64 = days_str
+        .parse()
+        .map_err(|_| DeidError::Dicom(format!("invalid jitter value: {}", days_str)))?;
+    let elem = match obj.element(tag) {
+        Ok(e) => e,
+        Err(_) => return Ok(()), // tag absent — nothing to jitter
+    };
+    let current = elem
+        .value()
+        .to_str()
+        .map_err(|e| DeidError::Dicom(format!("cannot read date for jitter: {}", e)))?;
+    let trimmed = current.trim();
+    // Blank/empty dates are a no-op
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    // Extract date portion (first 8 chars) and any time suffix (DT format)
+    let (date_part, time_suffix) = if trimmed.len() > 8 {
+        (&trimmed[..8], &trimmed[8..])
+    } else {
+        (trimmed, "")
+    };
+    let date = NaiveDate::parse_from_str(date_part, "%Y%m%d")
+        .map_err(|e| DeidError::Dicom(format!("invalid date for jitter: {}", e)))?;
+    let shifted = date + chrono::Duration::days(days);
+    let vr = lookup_vr(obj, tag);
+    let formatted = format!("{}{}", shifted.format("%Y%m%d"), time_suffix);
+    obj.put(DataElement::new(
+        tag,
+        vr,
+        Value::Primitive(PrimitiveValue::from(formatted.as_str())),
+    ));
+    Ok(())
+}
+
+/// Set `tag` to an empty value.
+fn apply_blank(obj: &mut InMemDicomObject, tag: Tag) {
+    let vr = lookup_vr(obj, tag);
+    obj.put(DataElement::new(
+        tag,
+        vr,
+        Value::Primitive(PrimitiveValue::from("")),
+    ));
+}
+
+/// How a rule whose coverage cannot be decided from the tag alone is
+/// matched inside sequence items.
+enum DynMatcher {
+    /// `(60xx,xxxx)`-style tags; decided by [`TagSpecifier::matches`].
+    Wildcard,
+    /// A regex over the tag's `(gggg,eeee)` form and dictionary keyword.
+    Pattern(Regex),
+    /// A private element addressed through its creator string. The
+    /// creator's slot differs per data set, so the concrete tag is
+    /// resolved per item; an item without the creator is simply not
+    /// covered.
+    Private {
+        group: u16,
+        creator: String,
+        element_offset: u8,
+    },
+}
+
+/// The recipe's actions indexed for the sequence-item pass, built once
+/// per data set.
+///
+/// Re-resolving every rule against every item made header
+/// de-identification scale with items x rules — nearly a second per
+/// file on ultrasound data carrying thousands of sequence items. This
+/// index lets each item be walked element by element, looking up the
+/// rules that cover each element it actually carries.
+struct NestedActionIndex<'a> {
+    /// Rules addressing one concrete tag (by keyword or tag number),
+    /// in recipe order.
+    direct: HashMap<Tag, Vec<(usize, &'a HeaderAction)>>,
+    /// Rules whose coverage depends on the tag pattern or the data
+    /// set, in recipe order.
+    dynamic: Vec<(usize, &'a HeaderAction, DynMatcher)>,
+}
+
+impl<'a> NestedActionIndex<'a> {
+    fn build(actions: &'a [HeaderAction]) -> Result<Self, DeidError> {
+        let dict = StandardDataDictionary;
+        let mut direct: HashMap<Tag, Vec<(usize, &'a HeaderAction)>> = HashMap::new();
+        let mut dynamic = Vec::new();
+        for (idx, action) in actions.iter().enumerate() {
+            match &action.tag {
+                TagSpecifier::Keyword(name) => {
+                    let entry = dict.by_name(name).ok_or_else(|| {
+                        DeidError::TagResolution(format!("unknown keyword: {}", name))
+                    })?;
+                    direct.entry(entry.tag()).or_default().push((idx, action));
+                }
+                TagSpecifier::TagValue(tag) => {
+                    direct.entry(*tag).or_default().push((idx, action));
+                }
+                TagSpecifier::Wildcard { .. } => {
+                    dynamic.push((idx, action, DynMatcher::Wildcard));
+                }
+                TagSpecifier::Pattern(pattern) => {
+                    let re = Regex::new(pattern)
+                        .map_err(|e| DeidError::TagResolution(format!("invalid regex: {}", e)))?;
+                    dynamic.push((idx, action, DynMatcher::Pattern(re)));
+                }
+                TagSpecifier::PrivateTag {
+                    group,
+                    creator,
+                    element_offset,
+                } => {
+                    dynamic.push((
+                        idx,
+                        action,
+                        DynMatcher::Private {
+                            group: *group,
+                            creator: creator.clone(),
+                            element_offset: *element_offset,
+                        },
+                    ));
+                }
+            }
+        }
+        Ok(NestedActionIndex { direct, dynamic })
+    }
+
+    /// The action governing `tag` within `item`, or `None` when no rule
+    /// covers it. Mirrors the top-level precedence resolution: the
+    /// highest-precedence rule wins, and among rules of equal
+    /// precedence the one earliest in the recipe.
+    fn winning_action(
+        &self,
+        tag: Tag,
+        private_resolved: &[(usize, &'a HeaderAction, Tag)],
+    ) -> Option<&'a HeaderAction> {
+        let dict = StandardDataDictionary;
+        let mut best: Option<(u8, usize, &'a HeaderAction)> = None;
+        let consider = |idx: usize, action: &'a HeaderAction, best: &mut Option<_>| {
+            let prec = action_precedence(&action.action_type);
+            let better = match best {
+                None => true,
+                Some((bp, bi, _)) => prec < *bp || (prec == *bp && idx < *bi),
+            };
+            if better {
+                *best = Some((prec, idx, action));
+            }
+        };
+
+        if let Some(rules) = self.direct.get(&tag) {
+            for (idx, action) in rules {
+                consider(*idx, action, &mut best);
+            }
+        }
+        for (idx, action, matcher) in &self.dynamic {
+            let covered = match matcher {
+                DynMatcher::Wildcard => action.tag.matches(tag).unwrap_or(false),
+                DynMatcher::Pattern(re) => {
+                    let tag_str = format!("({:04x},{:04x})", tag.0, tag.1);
+                    let keyword = dict
+                        .by_tag(tag)
+                        .map(|e| e.alias().to_string())
+                        .unwrap_or_default();
+                    re.is_match(&keyword) || re.is_match(&tag_str)
+                }
+                // Private rules are pre-resolved per item; unresolved
+                // ones cover nothing here.
+                DynMatcher::Private { .. } => false,
+            };
+            if covered {
+                consider(*idx, action, &mut best);
+            }
+        }
+        for (idx, action, resolved) in private_resolved {
+            if *resolved == tag {
+                consider(*idx, action, &mut best);
+            }
+        }
+        best.map(|(_, _, action)| action)
+    }
+
+    /// Resolve the private-creator rules against one item. An item
+    /// that does not carry the creator is not covered by the rule —
+    /// unlike the top level, where a missing creator is an error.
+    fn resolve_private(&self, item: &InMemDicomObject) -> Vec<(usize, &'a HeaderAction, Tag)> {
+        let mut resolved = Vec::new();
+        for (idx, action, matcher) in &self.dynamic {
+            let DynMatcher::Private {
+                group,
+                creator,
+                element_offset,
+            } = matcher
+            else {
+                continue;
+            };
+            for elem in item.iter() {
+                let tag = elem.tag();
+                if tag.0 == *group
+                    && (0x0010..=0x00FF).contains(&tag.1)
+                    && elem
+                        .value()
+                        .to_str()
+                        .is_ok_and(|val| val.trim() == creator.as_str())
+                {
+                    resolved.push((
+                        *idx,
+                        *action,
+                        Tag(*group, (tag.1 << 8) | (*element_offset as u16)),
+                    ));
+                    break;
+                }
+            }
+        }
+        resolved
+    }
+}
+
+/// Recurse into every sequence of `obj`, de-identifying each item's
+/// existing elements (r-3-13).
+///
+/// Unlike the top level, no element is ever created inside a sequence
+/// item: REPLACE and BLANK modify elements the item already carries,
+/// and ADD does not apply. An absent element carries no PHI, so
+/// introducing one adds no protection — it only corrupts the item's
+/// semantics and bloats the output (r-7-7 records the same rule for
+/// the mapper).
+fn apply_to_nested_sequences(
+    index: &NestedActionIndex,
+    variables: &HashMap<String, String>,
+    functions: &HashMap<String, DeidFunction>,
+    obj: &mut InMemDicomObject,
+) -> Result<(), DeidError> {
     let seq_tags: Vec<Tag> = obj
         .iter()
         .filter(|e| e.value().items().is_some())
@@ -140,7 +379,7 @@ pub fn apply_header_actions(
                     if seq_error.is_some() {
                         break;
                     }
-                    if let Err(e) = apply_header_actions(actions, variables, functions, item) {
+                    if let Err(e) = apply_to_item(index, variables, functions, item) {
                         seq_error = Some(e);
                     }
                 }
@@ -153,6 +392,42 @@ pub fn apply_header_actions(
     }
 
     Ok(())
+}
+
+/// De-identify one sequence item: apply the winning rule to each
+/// element the item carries, then recurse into its sequences.
+fn apply_to_item(
+    index: &NestedActionIndex,
+    variables: &HashMap<String, String>,
+    functions: &HashMap<String, DeidFunction>,
+    item: &mut InMemDicomObject,
+) -> Result<(), DeidError> {
+    let private_resolved = index.resolve_private(item);
+    let tags: Vec<Tag> = item.iter().map(|e| e.tag()).collect();
+    for tag in tags {
+        let Some(action) = index.winning_action(tag, &private_resolved) else {
+            continue;
+        };
+        match action.action_type {
+            ActionType::Keep => {}
+            // Never introduced into items, and the element exists, so
+            // there is nothing for ADD to do.
+            ActionType::Add => {}
+            ActionType::Replace => {
+                apply_replace(action, variables, functions, item, tag)?;
+            }
+            ActionType::Jitter => {
+                apply_jitter(action, variables, functions, item, tag)?;
+            }
+            ActionType::Remove => {
+                let _ = item.remove_element(tag);
+            }
+            ActionType::Blank => {
+                apply_blank(item, tag);
+            }
+        }
+    }
+    apply_to_nested_sequences(index, variables, functions, item)
 }
 
 /// Remove all private tags (tags with odd group numbers) from a DICOM object.
@@ -1988,6 +2263,216 @@ mod tests {
         assert!(
             seq_items[0].element(Tag(0x0009, 0x1001)).is_err(),
             "private data should be removed from sequence"
+        );
+    }
+
+    /// Requirement r-3-13: REPLACE and BLANK never introduce an element
+    /// into a sequence item that does not already carry it. An absent
+    /// element holds no PHI, so creating one protects nothing — it only
+    /// corrupts the item and, on files with thousands of items, made
+    /// processing scale with items x rules.
+    #[test]
+    fn r3_13_replace_and_blank_do_not_introduce_into_sequence_items() {
+        let mut item = create_test_obj();
+        put_str(&mut item, tags::MODALITY, VR::CS, "US");
+        let elements_before = item.iter().count();
+
+        let mut obj = create_test_obj();
+        put_str(&mut obj, tags::PATIENT_NAME, VR::PN, "Doe^Jane");
+        put_sequence(&mut obj, SEQ_TAG, vec![item]);
+
+        let actions = vec![
+            HeaderAction {
+                action_type: ActionType::Replace,
+                tag: TagSpecifier::Keyword("PatientName".into()),
+                value: Some(ActionValue::Literal("ANON".into())),
+            },
+            HeaderAction {
+                action_type: ActionType::Blank,
+                tag: TagSpecifier::Keyword("ReferringPhysicianName".into()),
+                value: None,
+            },
+        ];
+
+        apply_header_actions(&actions, &empty_vars(), &empty_funcs(), &mut obj)
+            .expect("should succeed");
+
+        // Top level: REPLACE overwrites the existing PatientName, and
+        // BLANK creates ReferringPhysicianName (top-level semantics are
+        // unchanged).
+        let val = obj
+            .element(tags::PATIENT_NAME)
+            .unwrap()
+            .value()
+            .to_str()
+            .unwrap();
+        assert_eq!(val.as_ref(), "ANON");
+        assert!(obj.element(tags::REFERRING_PHYSICIAN_NAME).is_ok());
+
+        // The item carried neither tag, so neither may appear in it.
+        let seq_items = obj.element(SEQ_TAG).unwrap().items().unwrap();
+        assert!(
+            seq_items[0].element(tags::PATIENT_NAME).is_err(),
+            "REPLACE must not introduce PatientName into the item"
+        );
+        assert!(
+            seq_items[0]
+                .element(tags::REFERRING_PHYSICIAN_NAME)
+                .is_err(),
+            "BLANK must not introduce ReferringPhysicianName into the item"
+        );
+        assert_eq!(
+            seq_items[0].iter().count(),
+            elements_before,
+            "the item must gain no elements at all"
+        );
+    }
+
+    /// Requirement r-3-13: ADD applies at the top level only; it never
+    /// creates elements inside sequence items.
+    #[test]
+    fn r3_13_add_applies_at_top_level_only() {
+        let mut item = create_test_obj();
+        put_str(&mut item, tags::MODALITY, VR::CS, "US");
+
+        let mut obj = create_test_obj();
+        put_sequence(&mut obj, SEQ_TAG, vec![item]);
+
+        let actions = vec![HeaderAction {
+            action_type: ActionType::Add,
+            tag: TagSpecifier::Keyword("PatientIdentityRemoved".into()),
+            value: Some(ActionValue::Literal("YES".into())),
+        }];
+
+        apply_header_actions(&actions, &empty_vars(), &empty_funcs(), &mut obj)
+            .expect("should succeed");
+
+        assert!(
+            obj.element(tags::PATIENT_IDENTITY_REMOVED).is_ok(),
+            "ADD creates the element at the top level"
+        );
+        let seq_items = obj.element(SEQ_TAG).unwrap().items().unwrap();
+        assert!(
+            seq_items[0]
+                .element(tags::PATIENT_IDENTITY_REMOVED)
+                .is_err(),
+            "ADD must not create the element inside a sequence item"
+        );
+    }
+
+    /// Requirement r-3-13: a wildcard rule still covers matching
+    /// elements inside sequence items.
+    #[test]
+    fn r3_13_wildcard_remove_inside_sequence() {
+        let mut item = create_test_obj();
+        put_str(&mut item, Tag(0x6002, 0x0022), VR::LO, "overlay comment");
+        put_str(&mut item, tags::MODALITY, VR::CS, "US");
+
+        let mut obj = create_test_obj();
+        put_sequence(&mut obj, SEQ_TAG, vec![item]);
+
+        let actions = vec![HeaderAction {
+            action_type: ActionType::Remove,
+            tag: TagSpecifier::Wildcard {
+                group: (0x6000, 0xFF00),
+                element: (0x0000, 0x0000),
+            },
+            value: None,
+        }];
+
+        apply_header_actions(&actions, &empty_vars(), &empty_funcs(), &mut obj)
+            .expect("should succeed");
+
+        let seq_items = obj.element(SEQ_TAG).unwrap().items().unwrap();
+        assert!(
+            seq_items[0].element(Tag(0x6002, 0x0022)).is_err(),
+            "overlay element inside the item must be removed"
+        );
+        assert!(seq_items[0].element(tags::MODALITY).is_ok());
+    }
+
+    /// Requirement r-3-13: a pattern rule still covers matching
+    /// elements inside sequence items, without introducing the other
+    /// tags the pattern could match.
+    #[test]
+    fn r3_13_pattern_replace_inside_sequence() {
+        let mut item = create_test_obj();
+        put_str(&mut item, tags::PATIENT_NAME, VR::PN, "Doe^Jane");
+
+        let mut obj = create_test_obj();
+        put_str(&mut obj, tags::PATIENT_NAME, VR::PN, "Doe^Jane");
+        put_sequence(&mut obj, SEQ_TAG, vec![item]);
+
+        let actions = vec![HeaderAction {
+            action_type: ActionType::Replace,
+            tag: TagSpecifier::Pattern("PatientName".into()),
+            value: Some(ActionValue::Literal("ANON".into())),
+        }];
+
+        apply_header_actions(&actions, &empty_vars(), &empty_funcs(), &mut obj)
+            .expect("should succeed");
+
+        let seq_items = obj.element(SEQ_TAG).unwrap().items().unwrap();
+        let val = seq_items[0]
+            .element(tags::PATIENT_NAME)
+            .unwrap()
+            .value()
+            .to_str()
+            .unwrap();
+        assert_eq!(val.as_ref(), "ANON", "existing nested element is replaced");
+        assert!(
+            seq_items[0].element(tags::PATIENT_ID).is_err(),
+            "no other element is introduced"
+        );
+    }
+
+    /// Requirement r-3-13: a private-creator rule covers the resolved
+    /// element inside an item that carries the creator, and an item
+    /// without the creator is simply not covered rather than an error.
+    #[test]
+    fn r3_13_private_tag_rule_inside_sequence() {
+        let mut with_creator = create_test_obj();
+        put_str(&mut with_creator, Tag(0x0009, 0x0010), VR::LO, "ACME");
+        put_str(&mut with_creator, Tag(0x0009, 0x1001), VR::LO, "secret");
+        let mut without_creator = create_test_obj();
+        put_str(&mut without_creator, tags::MODALITY, VR::CS, "US");
+
+        let mut obj = create_test_obj();
+        // The top level must carry the creator too: top-level
+        // resolution of a private rule errors when the creator is
+        // absent, and that behavior is unchanged.
+        put_str(&mut obj, Tag(0x0009, 0x0010), VR::LO, "ACME");
+        put_str(&mut obj, Tag(0x0009, 0x1001), VR::LO, "top secret");
+        put_sequence(&mut obj, SEQ_TAG, vec![with_creator, without_creator]);
+
+        let actions = vec![HeaderAction {
+            action_type: ActionType::Blank,
+            tag: TagSpecifier::PrivateTag {
+                group: 0x0009,
+                creator: "ACME".into(),
+                element_offset: 0x01,
+            },
+            value: None,
+        }];
+
+        apply_header_actions(&actions, &empty_vars(), &empty_funcs(), &mut obj)
+            .expect("an item without the creator must not fail the file");
+
+        let seq_items = obj.element(SEQ_TAG).unwrap().items().unwrap();
+        let val = seq_items[0]
+            .element(Tag(0x0009, 0x1001))
+            .unwrap()
+            .value()
+            .to_str()
+            .unwrap();
+        assert_eq!(
+            val.as_ref(),
+            "",
+            "the resolved private element in the covered item is blanked"
+        );
+        assert!(
+            seq_items[1].element(Tag(0x0009, 0x1001)).is_err(),
+            "the uncovered item gains nothing"
         );
     }
 

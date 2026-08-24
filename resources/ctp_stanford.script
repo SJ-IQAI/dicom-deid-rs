@@ -933,6 +933,35 @@
           )
        )
 
+       // LOGIQE10
+       +((ManufacturerModelName.equals("LOGIQE10") * !SoftwareVersion.contains("LOGIQe:"))
+          // Resolution whitelists
+          *(
+            (Rows.equals("970") * Columns.equals("1552"))
+           +(Rows.equals("873") * Columns.equals("1552"))
+           +(Rows.equals("899") * Columns.equals("1442"))
+           +(Rows.equals("819") * Columns.equals("1456"))
+           +(Rows.equals("802") * Columns.equals("1442"))
+           +(Rows.equals("748") * Columns.equals("1346"))
+           +(Rows.equals("768") * Columns.equals("1280"))
+           +(Rows.equals("720") * Columns.equals("1280"))
+           +(Rows.equals("649") * Columns.equals("1170"))
+           +(Rows.equals("873") * Columns.equals("1164"))
+           +(Rows.equals("819") * Columns.equals("1092"))
+           +(Rows.equals("802") * Columns.equals("1054"))
+           +(Rows.equals("748") * Columns.equals("982"))
+           +(Rows.equals("720") * Columns.equals("960"))
+           +(Rows.equals("519") * Columns.equals("936"))
+           +(Rows.equals("697") * Columns.equals("914"))
+           +(Rows.equals("649") * Columns.equals("852"))
+           +(Rows.equals("649") * Columns.equals("850"))
+           +(Rows.equals("614") * Columns.equals("820"))
+           +(Rows.equals("421") * Columns.equals("760"))
+           +(Rows.equals("519") * Columns.equals("680"))
+           +(Rows.equals("421") * Columns.equals("552"))
+          )
+       )
+
 
        // LOGICQS6
        +((ManufacturerModelName.equals("LOGIQ S6") +

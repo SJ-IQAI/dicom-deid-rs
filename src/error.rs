@@ -71,3 +71,25 @@ impl DeidError {
         matches!(self, Self::FatalMeta(_))
     }
 }
+
+/// Render an error together with everything that caused it.
+///
+/// The DICOM library reports failures as layered errors whose outermost
+/// message is a category ("Could not parse meta group data set") and
+/// whose actual reason sits one or more levels down. Formatting only the
+/// outer error with `{}` — which is what `format!("...: {}", e)` does —
+/// discards exactly the part that says what is wrong with the file.
+pub fn describe(error: &dyn std::error::Error) -> String {
+    let mut out = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        let text = cause.to_string();
+        // Layers sometimes restate their parent; don't echo it back.
+        if !out.ends_with(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        source = cause.source();
+    }
+    out
+}

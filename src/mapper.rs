@@ -236,89 +236,42 @@ impl PatientIdMapper {
         self.entries.get(patient_id.trim()).map(String::as_str)
     }
 
-    /// Replace every PatientID in the data set with its mapped value.
+    /// Look up the replacement for a data set's PatientID (r-7-6).
     ///
-    /// The replacement reaches PatientID elements nested inside
-    /// sequences at any depth (r-7-7), and each is looked up by its own
-    /// value rather than the top-level one — a sequence may reference a
-    /// different patient, and copying the top-level replacement over it
-    /// would silently mislabel that reference.
+    /// Called *before* the recipe runs, since the recipe is what changes
+    /// the value being looked up. The data set's own top-level PatientID
+    /// is what gets looked up, and only that: a file routinely carries
+    /// PatientID copies inside sequences formatted differently from the
+    /// top-level one (zero-padded to a fixed width, for instance), and
+    /// treating each as its own identifier meant one unrecognized copy
+    /// discarded a file whose actual PatientID mapped perfectly well.
     ///
     /// # Errors
     ///
     /// Returns [`DeidError::MapperLookup`] — non-fatal, so the pipeline
     /// counts the file as skipped per r-1-5 — when the data set carries
-    /// no PatientID, when one is empty, or when a value has no entry in
-    /// the mapper (r-7-6).
-    pub fn apply(&self, obj: &mut InMemDicomObject) -> Result<(), DeidError> {
-        if self.replace_in(obj)? == 0 {
-            return Err(DeidError::MapperLookup(
-                "data set has no PatientID (0010,0020) to map".to_string(),
-            ));
-        }
-        Ok(())
+    /// no top-level PatientID, when it is empty, or when its value has
+    /// no entry in the mapper.
+    pub fn resolve_for(&self, obj: &InMemDicomObject) -> Result<String, DeidError> {
+        let current = match obj.element(tags::PATIENT_ID) {
+            Ok(elem) => elem.value().to_str().map_err(|e| {
+                DeidError::MapperLookup(format!("cannot read PatientID (0010,0020): {}", e))
+            })?,
+            Err(_) => {
+                return Err(DeidError::MapperLookup(
+                    "data set has no PatientID (0010,0020) to map".to_string(),
+                ));
+            }
+        };
+        self.resolve(current.trim()).map(str::to_string)
     }
 
-    /// Apply the mapping in place, returning how many elements changed.
-    fn replace_in(&self, obj: &mut InMemDicomObject) -> Result<usize, DeidError> {
-        let mut replaced = 0;
-
-        let current = match obj.element(tags::PATIENT_ID) {
-            Ok(elem) => Some(elem.value().to_str().map_err(|e| {
-                DeidError::MapperLookup(format!("cannot read PatientID (0010,0020): {}", e))
-            })?),
-            Err(_) => None,
-        };
-        if let Some(current) = current {
-            let current = current.trim().to_string();
-            let replacement = self.resolve(&current)?;
-            // PatientID's dictionary VR, not whatever the source file
-            // declared: a value written back as UN would not read as
-            // text on the far side.
-            obj.put(DataElement::new(
-                tags::PATIENT_ID,
-                VR::LO,
-                Value::Primitive(PrimitiveValue::from(replacement)),
-            ));
-            replaced += 1;
-        }
-
-        let sequences: Vec<Tag> = obj
-            .iter()
-            .filter(|elem| elem.value().items().is_some())
-            .map(|elem| elem.tag())
-            .collect();
-
-        for tag in sequences {
-            let mut elem = match obj.take_element(tag) {
-                Ok(elem) => elem,
-                Err(_) => continue,
-            };
-            let mut nested: Result<usize, DeidError> = Ok(0);
-            elem.update_value(|value| {
-                if let Some(items) = value.items_mut() {
-                    for item in items.iter_mut() {
-                        if nested.is_err() {
-                            break;
-                        }
-                        match self.replace_in(item) {
-                            Ok(count) => {
-                                if let Ok(total) = &mut nested {
-                                    *total += count;
-                                }
-                            }
-                            Err(e) => nested = Err(e),
-                        }
-                    }
-                }
-            });
-            // Put the element back before propagating, so a failure
-            // cannot leave the sequence missing from the object.
-            obj.put(elem);
-            replaced += nested?;
-        }
-
-        Ok(replaced)
+    /// Look up and apply in one step, for callers driving the mapper
+    /// directly rather than through the pipeline (r-6-1).
+    pub fn apply(&self, obj: &mut InMemDicomObject) -> Result<(), DeidError> {
+        let replacement = self.resolve_for(obj)?;
+        force_patient_id(obj, &replacement);
+        Ok(())
     }
 
     /// Look up one value, turning a miss into the error that skips the
@@ -338,6 +291,59 @@ impl PatientIdMapper {
                     current
                 ))
             })
+    }
+}
+
+/// Write the mapped value into PatientID, overriding whatever the
+/// recipe left there (r-7-2).
+///
+/// Runs *after* the recipe, so the mapper wins no matter what the recipe
+/// did to (0010,0020) — including removing it, in which case it is put
+/// back. This is the single tag the mapper overrides; every other tag is
+/// left exactly as the recipe produced it.
+pub fn force_patient_id(obj: &mut InMemDicomObject, replacement: &str) {
+    put_patient_id(obj, replacement);
+    replace_nested(obj, replacement);
+}
+
+/// PatientID's dictionary VR, not whatever the source file declared: a
+/// value written back as UN would not read as text on the far side.
+fn put_patient_id(obj: &mut InMemDicomObject, replacement: &str) {
+    obj.put(DataElement::new(
+        tags::PATIENT_ID,
+        VR::LO,
+        Value::Primitive(PrimitiveValue::from(replacement)),
+    ));
+}
+
+/// Write `replacement` over every PatientID nested inside sequences, at
+/// any depth (r-7-7).
+///
+/// Only existing elements are overwritten; no PatientID is introduced
+/// into a sequence item that did not already carry one.
+fn replace_nested(obj: &mut InMemDicomObject, replacement: &str) {
+    let sequences: Vec<Tag> = obj
+        .iter()
+        .filter(|elem| elem.value().items().is_some())
+        .map(|elem| elem.tag())
+        .collect();
+
+    for tag in sequences {
+        let mut elem = match obj.take_element(tag) {
+            Ok(elem) => elem,
+            Err(_) => continue,
+        };
+        elem.update_value(|value| {
+            if let Some(items) = value.items_mut() {
+                for item in items.iter_mut() {
+                    if item.element(tags::PATIENT_ID).is_ok() {
+                        put_patient_id(item, replacement);
+                    }
+                    replace_nested(item, replacement);
+                }
+            }
+        });
+        obj.put(elem);
     }
 }
 
@@ -1112,30 +1118,36 @@ mod tests {
             .expect("has items")[0];
         assert_eq!(
             patient_id(inner),
-            "ANON-2",
-            "a nested reference is mapped by its own value, not the top-level one"
+            "ANON-1",
+            "nested copies take the top-level PatientID's replacement"
         );
     }
 
-    /// Requirement r-7-7: an unmapped value nested in a sequence fails
-    /// the file rather than leaving the identifier behind.
+    /// Requirement r-7-7: a nested PatientID that does not itself appear
+    /// in the mapper must not discard the file. Files routinely carry
+    /// copies inside sequences formatted differently from the top-level
+    /// value — zero-padded to a fixed width, for instance — and only the
+    /// top-level value identifies the patient.
     #[test]
-    fn r7_7_unmapped_nested_patient_id_fails_the_file() {
-        let mapper = mapper(&[("MRN001", "ANON-1")]);
+    fn r7_7_unrecognized_nested_patient_id_does_not_fail_the_file() {
+        let mapper = mapper(&[("12345", "ANON-1")]);
 
-        let inner = obj_with_patient_id("MRN999");
-        let mut obj = obj_with_patient_id("MRN001");
+        let inner = obj_with_patient_id("1234500000");
+        let mut obj = obj_with_patient_id("12345");
         put_sequence(&mut obj, tags::REFERENCED_PATIENT_SEQUENCE, vec![inner]);
 
-        let err = mapper.apply(&mut obj).expect_err("should refuse to map");
-        assert!(
-            err.to_string().contains("MRN999"),
-            "unexpected error: {}",
-            err
-        );
-        assert!(
-            obj.element(tags::REFERENCED_PATIENT_SEQUENCE).is_ok(),
-            "the sequence must be put back even when mapping fails"
+        mapper.apply(&mut obj).expect("the file must still map");
+
+        assert_eq!(patient_id(&obj), "ANON-1");
+        let inner = &obj
+            .element(tags::REFERENCED_PATIENT_SEQUENCE)
+            .expect("sequence present")
+            .items()
+            .expect("has items")[0];
+        assert_eq!(
+            patient_id(inner),
+            "ANON-1",
+            "the nested copy is overwritten too, so no original identifier survives"
         );
     }
 

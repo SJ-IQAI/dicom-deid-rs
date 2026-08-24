@@ -10,23 +10,20 @@ fn print_usage(program: &str) {
         "Usage: {} <input_dir> <output_dir> <recipe_file> [OPTIONS]",
         program
     );
-    eprintln!(
-        "       {} <input_dir> <output_dir> --mapper <file>",
-        program
-    );
     eprintln!();
     eprintln!("Options:");
     eprintln!("  --var NAME VALUE      Define a recipe variable (can be repeated)");
     eprintln!("  --salt VALUE          Salt mixed into the built-in hashuid function.");
     eprintln!("                        Use the same salt across runs to keep hashed");
     eprintln!("                        values consistent for a dataset.");
-    eprintln!("  --mapper PATH         Read PatientID replacements from a .csv or .json");
-    eprintln!("                        file and de-identify ONLY PatientID (0010,0020)");
-    eprintln!("                        with them. No recipe actions, filters, pixel");
-    eprintln!("                        masking, or private tag removal are applied, so");
-    eprintln!("                        <recipe_file> becomes optional and is ignored.");
-    eprintln!("                        A file whose PatientID is missing, empty, or");
-    eprintln!("                        absent from the mapper is skipped, never written.");
+    eprintln!("  --mapper PATH         Take PatientID (0010,0020) from a .csv or .json");
+    eprintln!("                        file of original-to-replacement pairs. The recipe");
+    eprintln!("                        still does everything else it normally does;");
+    eprintln!("                        --mapper overrides it for this one tag only.");
+    eprintln!("                        The original PatientID is looked up before the");
+    eprintln!("                        recipe runs; a file whose PatientID is missing,");
+    eprintln!("                        empty, or absent from the mapper is skipped and");
+    eprintln!("                        never written.");
     eprintln!("                        CSV: original PatientID, replacement PatientID;");
     eprintln!("                        a header row such as 'PatientID,DeidPatientID'");
     eprintln!("                        is recognized and skipped.");
@@ -125,21 +122,10 @@ fn main() {
         }
     }
 
-    let expected = if mapper_file.is_some() {
-        "<input_dir> and <output_dir>"
-    } else {
-        "<input_dir>, <output_dir> and <recipe_file>"
-    };
-    let minimum = if mapper_file.is_some() { 2 } else { 3 };
-    if positional.len() < minimum || positional.len() > 3 {
-        fail(&format!("expected {}", expected), &args[0]);
-    }
-    // In mapper mode the recipe is not consulted at all (r-7-2); say so
-    // rather than letting an operator believe it was applied.
-    if mapper_file.is_some() && positional.len() == 3 {
-        eprintln!(
-            "Warning: --mapper replaces the recipe, so '{}' is ignored",
-            positional[2]
+    if positional.len() != 3 {
+        fail(
+            "expected <input_dir>, <output_dir> and <recipe_file>",
+            &args[0],
         );
     }
 
@@ -156,7 +142,7 @@ fn main() {
     let config = DeidConfig {
         input_dir: PathBuf::from(&positional[0]),
         output_dir: PathBuf::from(&positional[1]),
-        recipe_path: positional.get(2).map(PathBuf::from).unwrap_or_default(),
+        recipe_path: PathBuf::from(&positional[2]),
         variables,
         functions: HashMap::new(),
         salt,
@@ -165,7 +151,7 @@ fn main() {
     };
 
     let pipeline = match &mapper_file {
-        Some(path) => DeidPipeline::from_mapper_file(path, config),
+        Some(path) => DeidPipeline::with_mapper_file(config, path),
         None => DeidPipeline::new(config),
     };
     let pipeline = match pipeline {

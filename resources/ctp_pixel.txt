@@ -2956,9 +2956,23 @@ equals Modality US
   + equals Columns 1552
 ctpcoordinates 0,0,1174,68
 
+LABEL Ultrasound GE 22 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 970
+  + equals Columns 1552
+ctpcoordinates 0,0,1174,68
+
 LABEL Ultrasound GE 23
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 873
+  + equals Columns 1552
+ctpcoordinates 0,0,1196,68
+
+LABEL Ultrasound GE 23 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 873
   + equals Columns 1552
 ctpcoordinates 0,0,1196,68
@@ -2970,9 +2984,23 @@ equals Modality US
   + equals Columns 1456
 ctpcoordinates 0,0,1122,70
 
+LABEL Ultrasound GE 24 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 819
+  + equals Columns 1456
+ctpcoordinates 0,0,1122,70
+
 LABEL Ultrasound GE 25
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 899
+  + equals Columns 1442
+ctpcoordinates 0,0,1000,32
+
+LABEL Ultrasound GE 25 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 899
   + equals Columns 1442
 ctpcoordinates 0,0,1000,32
@@ -2984,9 +3012,23 @@ equals Modality US
   + equals Columns 1442
 ctpcoordinates 0,0,1000,32
 
+LABEL Ultrasound GE 26 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 802
+  + equals Columns 1442
+ctpcoordinates 0,0,1000,32
+
 LABEL Ultrasound GE 27
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 748
+  + equals Columns 1346
+ctpcoordinates 0,0,1000,24
+
+LABEL Ultrasound GE 27 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 748
   + equals Columns 1346
 ctpcoordinates 0,0,1000,24
@@ -2998,9 +3040,23 @@ equals Modality US
   + equals Columns 1280
 ctpcoordinates 0,0,826,92
 
+LABEL Ultrasound GE 28 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 768
+  + equals Columns 1280
+ctpcoordinates 0,0,826,92
+
 LABEL Ultrasound GE 29
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 720
+  + equals Columns 1280
+ctpcoordinates 0,0,968,70
+
+LABEL Ultrasound GE 29 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 720
   + equals Columns 1280
 ctpcoordinates 0,0,968,70
@@ -3012,9 +3068,23 @@ equals Modality US
   + equals Columns 1170
 ctpcoordinates 0,0,880,24
 
+LABEL Ultrasound GE 30 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 649
+  + equals Columns 1170
+ctpcoordinates 0,0,880,24
+
 LABEL Ultrasound GE 31
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 873
+  + equals Columns 1164
+ctpcoordinates 0,0,808,70
+
+LABEL Ultrasound GE 31 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 873
   + equals Columns 1164
 ctpcoordinates 0,0,808,70
@@ -3026,9 +3096,23 @@ equals Modality US
   + equals Columns 1092
 ctpcoordinates 0,0,758,68
 
+LABEL Ultrasound GE 32 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 819
+  + equals Columns 1092
+ctpcoordinates 0,0,758,68
+
 LABEL Ultrasound GE 33
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 802
+  + equals Columns 1054
+ctpcoordinates 0,0,700,30
+
+LABEL Ultrasound GE 33 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 802
   + equals Columns 1054
 ctpcoordinates 0,0,700,30
@@ -3040,9 +3124,23 @@ equals Modality US
   + equals Columns 960
 ctpcoordinates 0,0,666,68
 
+LABEL Ultrasound GE 34 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 720
+  + equals Columns 960
+ctpcoordinates 0,0,666,68
+
 LABEL Ultrasound GE 35
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 748
+  + equals Columns 982
+ctpcoordinates 0,0,670,28
+
+LABEL Ultrasound GE 35 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 748
   + equals Columns 982
 ctpcoordinates 0,0,670,28
@@ -3054,6 +3152,13 @@ equals Modality US
   + equals Columns 850
 ctpcoordinates 0,0,595,26
 
+LABEL Ultrasound GE 36 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 649
+  + equals Columns 850
+ctpcoordinates 0,0,595,26
+
 LABEL Ultrasound GE 37
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
@@ -3061,9 +3166,23 @@ equals Modality US
   + equals Columns 852
 ctpcoordinates 0,0,595,26
 
+LABEL Ultrasound GE 37 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
+  + equals Rows 649
+  + equals Columns 852
+ctpcoordinates 0,0,595,26
+
 LABEL Ultrasound GE 38
 equals Modality US
   + contains ManufacturerModelName LOGIQE9
+  + equals Rows 614
+  + equals Columns 820
+ctpcoordinates 0,0,568,55
+
+LABEL Ultrasound GE 38 LOGIQE10
+equals Modality US
+  + contains ManufacturerModelName LOGIQE10
   + equals Rows 614
   + equals Columns 820
 ctpcoordinates 0,0,568,55

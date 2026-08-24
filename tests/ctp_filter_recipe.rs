@@ -108,7 +108,7 @@ fn generated_recipe_has_the_expected_sections_and_label_counts() {
     );
     assert_eq!(
         count(FilterType::Graylist),
-        487,
+        504,
         "graylist labels, copied unchanged from ctp_pixel.txt"
     );
     assert!(

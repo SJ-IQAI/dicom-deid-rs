@@ -2,7 +2,7 @@ use crate::error::DeidError;
 use crate::filter_index::FilterIndex;
 use crate::functions;
 use crate::layout::OutputLayout;
-use crate::mapper::PatientIdMapper;
+use crate::mapper::{self, PatientIdMapper};
 use crate::metadata;
 use crate::metadata::DeidFunction;
 use crate::pixel;
@@ -119,31 +119,36 @@ impl DeidPipeline {
         Self::assemble(recipe, config, None)
     }
 
-    /// Create a pipeline in mapper mode from a mapper file (r-7-1).
+    /// Create a pipeline that runs the recipe with a PatientID mapper
+    /// layered over it (r-7-1, r-7-2).
     ///
-    /// The file is read and validated here, so a malformed or empty
-    /// mapper is reported before any DICOM file is processed.
-    /// `config.recipe_path` is not read: mapper mode replaces the
-    /// recipe rather than supplementing it (r-7-2).
-    pub fn from_mapper_file(mapper_path: &Path, config: DeidConfig) -> Result<Self, DeidError> {
-        Self::from_mapper(PatientIdMapper::load(mapper_path)?, config)
+    /// The mapper file is read and validated here, so a malformed or
+    /// empty mapper is reported before any DICOM file is processed.
+    pub fn with_mapper_file(config: DeidConfig, mapper_path: &Path) -> Result<Self, DeidError> {
+        Self::with_mapper(config, PatientIdMapper::load(mapper_path)?)
     }
 
-    /// Create a pipeline in mapper mode from a mapper built in memory
-    /// (r-6-1, r-7-2).
+    /// Create a pipeline that runs the recipe with a mapper built in
+    /// memory layered over it (r-6-1, r-6-2, r-7-2).
     ///
-    /// The only de-identification applied to the data set is the
-    /// PatientID substitution: no recipe actions, no filter evaluation,
-    /// no pixel masking, and no private tag removal. File Meta
-    /// Information de-identification (r-3-14) still applies, since it is
-    /// unconditional for every written file.
-    pub fn from_mapper(mapper: PatientIdMapper, config: DeidConfig) -> Result<Self, DeidError> {
-        let empty = Recipe {
-            format: "dicom".to_string(),
-            header: Vec::new(),
-            filters: Vec::new(),
-        };
-        Self::assemble(empty, config, Some(mapper))
+    /// The recipe does everything it normally does — filters, pixel
+    /// masking, header actions, private tag removal. The mapper
+    /// overrides exactly one tag: PatientID (0010,0020) takes its value
+    /// from the mapper instead of from the recipe.
+    pub fn with_mapper(config: DeidConfig, mapper: PatientIdMapper) -> Result<Self, DeidError> {
+        let recipe_text = fs::read_to_string(&config.recipe_path)?;
+        let recipe = Recipe::parse(&recipe_text)?;
+        Self::assemble(recipe, config, Some(mapper))
+    }
+
+    /// Create a pipeline from recipe text with a mapper layered over it.
+    pub fn from_recipe_text_with_mapper(
+        recipe_text: &str,
+        config: DeidConfig,
+        mapper: PatientIdMapper,
+    ) -> Result<Self, DeidError> {
+        let recipe = Recipe::parse(recipe_text)?;
+        Self::assemble(recipe, config, Some(mapper))
     }
 
     fn assemble(
@@ -221,7 +226,14 @@ impl DeidPipeline {
                     return Err(e);
                 }
                 Err(e) => {
-                    pb.println(format!("Warning: skipping {}: {}", file_path.display(), e));
+                    // `pb.println` draws through the progress bar, which
+                    // is hidden when stderr is not a terminal — that
+                    // silently drops every skip reason in a piped or
+                    // logged run. `suspend` clears the bar and lets the
+                    // write through in both cases.
+                    pb.suspend(|| {
+                        eprintln!("Warning: skipping {}: {}", file_path.display(), e);
+                    });
                     report.files_skipped += 1;
                 }
             }
@@ -236,48 +248,57 @@ impl DeidPipeline {
 
     pub fn process_file(&self, file_path: &Path) -> Result<FileOutcome, DeidError> {
         let mut obj = open_file(file_path).map_err(|e| {
-            DeidError::Dicom(format!("failed to open {}: {}", file_path.display(), e))
+            DeidError::Dicom(format!(
+                "failed to open {}: {}",
+                file_path.display(),
+                crate::error::describe(&e)
+            ))
         })?;
 
-        match &self.mapper {
-            // Mapper mode (r-7-2): substituting PatientID is the whole
-            // of the de-identification. Filters, pixel masking, header
-            // actions, and private tag removal are all deliberately
-            // skipped — the caller asked for this file to be left alone
-            // apart from its identifier. A value with no entry in the
-            // mapper returns a non-fatal error here, so the file is
-            // counted as skipped and never written (r-7-6).
-            Some(mapper) => mapper.apply(&mut obj)?,
-            None => {
-                // Check blacklist, unless an allowlist rule exempts this file (r-5-2).
-                //
-                // The exemption stops here: it suppresses *rejection* only. Masking and
-                // header de-identification below still run, because a device whitelist
-                // exists precisely to admit devices that carry burned-in PHI and leave
-                // the graylist to mask it. Short-circuiting past the next two blocks
-                // would emit that PHI.
-                if !self.filter_index.is_allowlisted(&obj)
-                    && let Some(reason) = self.filter_index.blacklist_reason(&obj)
-                {
-                    return Ok(FileOutcome::Blacklisted(reason.to_string()));
-                }
+        // Check blacklist, unless an allowlist rule exempts this file (r-5-2).
+        //
+        // The exemption stops here: it suppresses *rejection* only. Masking and
+        // header de-identification below still run, because a device whitelist
+        // exists precisely to admit devices that carry burned-in PHI and leave
+        // the graylist to mask it. Short-circuiting past the next two blocks
+        // would emit that PHI.
+        if !self.filter_index.is_allowlisted(&obj)
+            && let Some(reason) = self.filter_index.blacklist_reason(&obj)
+        {
+            return Ok(FileOutcome::Blacklisted(reason.to_string()));
+        }
 
-                // Pixel de-identification
-                let regions = self.filter_index.get_graylist_regions(&obj);
-                if !regions.is_empty() {
-                    pixel::decompress_pixel_data(&mut obj)?;
-                    pixel::apply_pixel_mask(&mut obj, &regions)?;
-                }
+        // Resolve the PatientID replacement before any action runs: the
+        // recipe is about to change the very value being looked up
+        // (r-7-2). A value with no entry in the mapper returns a
+        // non-fatal error, so the file is counted as skipped and never
+        // written (r-7-6).
+        let mapped_patient_id = match &self.mapper {
+            Some(mapper) => Some(mapper.resolve_for(&obj)?),
+            None => None,
+        };
 
-                // Metadata de-identification
-                metadata::apply_header_actions(
-                    &self.recipe.header,
-                    &self.config.variables,
-                    &self.config.functions,
-                    &mut obj,
-                )?;
-                metadata::remove_private_tags(&mut obj);
-            }
+        // Pixel de-identification
+        let regions = self.filter_index.get_graylist_regions(&obj);
+        if !regions.is_empty() {
+            pixel::decompress_pixel_data(&mut obj)?;
+            pixel::apply_pixel_mask(&mut obj, &regions)?;
+        }
+
+        // Metadata de-identification
+        metadata::apply_header_actions(
+            &self.recipe.header,
+            &self.config.variables,
+            &self.config.functions,
+            &mut obj,
+        )?;
+        metadata::remove_private_tags(&mut obj);
+
+        // The mapper overrides exactly one tag, and it does so last so
+        // that it wins over whatever the recipe did to PatientID —
+        // including removing it (r-7-2).
+        if let Some(replacement) = &mapped_patient_id {
+            mapper::force_patient_id(&mut obj, replacement);
         }
 
         // Bring the file meta group in line with the de-identified data
@@ -319,7 +340,11 @@ impl DeidPipeline {
         }
 
         obj.write_to_file(&output_path).map_err(|e| {
-            DeidError::Dicom(format!("failed to write {}: {}", output_path.display(), e))
+            DeidError::Dicom(format!(
+                "failed to write {}: {}",
+                output_path.display(),
+                crate::error::describe(&e)
+            ))
         })?;
 
         Ok(FileOutcome::Processed(output_path))
@@ -678,6 +703,14 @@ fn find_dicom_files_recursive(dir: &Path, results: &mut Vec<PathBuf>) -> Result<
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
+        // Hidden entries are never DICOM inputs, and macOS plants
+        // metadata sidecars among the real files on SMB/exFAT volumes:
+        // AppleDouble companions ("._image.dcm") match the .dcm
+        // extension but hold resource-fork data, so opening them fails
+        // the DICM magic check (r-1-2).
+        if entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
         if path.is_dir() {
             find_dicom_files_recursive(&path, results)?;
         } else if path
@@ -768,6 +801,35 @@ mod tests {
                 .to_str()
                 .unwrap()
                 .ends_with(".dcm")
+        );
+    }
+
+    /// Requirement r-1-2: hidden files and directories are not inputs.
+    /// macOS writes AppleDouble sidecars ("._image.dcm") next to real
+    /// files on SMB and exFAT volumes; they match the .dcm extension
+    /// but are not DICOM, so picking them up fails every one of them
+    /// at the DICM magic check.
+    #[test]
+    fn r1_2_find_skips_hidden_and_appledouble_files() {
+        let tmp = TempDir::new().expect("should create temp dir");
+        let root = tmp.path();
+
+        fs::write(root.join("image.dcm"), b"DICM").expect("write");
+        // AppleDouble sidecar: starts with the AppleDouble magic, not DICM.
+        fs::write(root.join("._image.dcm"), [0x00, 0x05, 0x16, 0x07]).expect("write");
+        fs::write(root.join(".hidden.dcm"), b"DICM").expect("write");
+
+        // A hidden directory (e.g. .Trashes on a USB volume) must not
+        // be descended into, even if it holds .dcm names.
+        let hidden_dir = root.join(".Trashes");
+        fs::create_dir_all(&hidden_dir).expect("should create hidden dir");
+        fs::write(hidden_dir.join("deleted.dcm"), b"DICM").expect("write");
+
+        let files = DeidPipeline::find_dicom_files(root).expect("should find files");
+        assert_eq!(
+            files,
+            vec![root.join("image.dcm")],
+            "only the real, visible DICOM file should be found"
         );
     }
 
@@ -1795,8 +1857,18 @@ REPLACE SOPInstanceUID func:hashuid
 
     // -- r-7 -----------------------------------------------------------------
 
-    /// Write an input file carrying the given PatientID, plus the tags a
-    /// mapper-mode run must leave alone.
+    /// A recipe that de-identifies PatientID and PatientName, so a run
+    /// with a mapper can show the mapper winning on PatientID while the
+    /// recipe still governs everything else (r-7-2).
+    const MAPPER_RECIPE: &str = "\
+FORMAT dicom
+%header
+REPLACE PatientID func:hashuid_ascii
+REPLACE PatientName ANON
+";
+
+    /// Write an input file carrying the given PatientID, plus tags used
+    /// to show what the recipe does alongside the mapper.
     fn write_mapper_input(input_dir: &Path, name: &str, patient_id: &str) -> PathBuf {
         use crate::test_helpers::*;
 
@@ -1820,7 +1892,8 @@ REPLACE SOPInstanceUID func:hashuid
             &format!("1.2.3.{}", name),
         );
         put_str(&mut obj, dicom_dictionary_std::tags::MODALITY, VR::CS, "CT");
-        // A private tag, which mapper mode must not strip (r-7-2).
+        // A private tag: the recipe still strips these (r-3-12), which
+        // is how a run shows the recipe is doing its normal work.
         put_str(&mut obj, Tag(0x0009, 0x0010), VR::LO, "ACME");
 
         fs::create_dir_all(input_dir).expect("create input dir");
@@ -1842,9 +1915,10 @@ REPLACE SOPInstanceUID func:hashuid
         }
     }
 
-    /// Requirement r-7-2: a full run replaces PatientID and nothing else.
+    /// Requirement r-7-2: the recipe does everything it normally does;
+    /// the mapper overrides it for PatientID alone.
     #[test]
-    fn r7_2_mapper_run_changes_only_the_patient_id() {
+    fn r7_2_mapper_overrides_only_patient_id_and_the_recipe_still_runs() {
         use crate::mapper::PatientIdMapper;
 
         let tmp = TempDir::new().expect("should create temp dir");
@@ -1854,9 +1928,12 @@ REPLACE SOPInstanceUID func:hashuid
 
         let mapper =
             PatientIdMapper::from_pairs([("MRN001", "ANON-1")]).expect("should build mapper");
-        let pipeline =
-            DeidPipeline::from_mapper(mapper, mapper_config(input_dir, output_dir.clone()))
-                .expect("should create pipeline");
+        let pipeline = DeidPipeline::from_recipe_text_with_mapper(
+            MAPPER_RECIPE,
+            mapper_config(input_dir, output_dir.clone()),
+            mapper,
+        )
+        .expect("should create pipeline");
         let report = pipeline
             .run_with_progress(|_, _, _| {})
             .expect("should run pipeline");
@@ -1876,21 +1953,93 @@ REPLACE SOPInstanceUID func:hashuid
                 .trim()
                 .to_string()
         };
-        assert_eq!(value(dicom_dictionary_std::tags::PATIENT_ID), "ANON-1");
         assert_eq!(
-            value(dicom_dictionary_std::tags::PATIENT_NAME),
-            "Doe^Jane",
-            "no recipe ran, so PatientName must survive"
+            value(dicom_dictionary_std::tags::PATIENT_ID),
+            "ANON-1",
+            "the mapper must beat the recipe's REPLACE PatientID func:hashuid_ascii"
         );
         assert_eq!(
-            value(Tag(0x0009, 0x0010)),
-            "ACME",
-            "mapper mode must not remove private tags"
+            value(dicom_dictionary_std::tags::PATIENT_NAME),
+            "ANON",
+            "the recipe still governs every other tag"
+        );
+        assert!(
+            result.element(Tag(0x0009, 0x0010)).is_err(),
+            "private tag removal still runs (r-3-12)"
         );
         // r-3-14 still applies: the meta group is synced regardless.
         assert_eq!(
             result.meta().media_storage_sop_instance_uid(),
             value(dicom_dictionary_std::tags::SOP_INSTANCE_UID)
+        );
+    }
+
+    /// Requirement r-7-2: with no mapper the recipe is untouched, so
+    /// PatientID follows whatever the recipe says.
+    #[test]
+    fn r7_2_without_a_mapper_the_recipe_governs_patient_id() {
+        let tmp = TempDir::new().expect("should create temp dir");
+        let input_dir = tmp.path().join("input");
+        let output_dir = tmp.path().join("output");
+        write_mapper_input(&input_dir, "a", "MRN001");
+
+        let pipeline = DeidPipeline::from_recipe_text(
+            MAPPER_RECIPE,
+            mapper_config(input_dir, output_dir.clone()),
+        )
+        .expect("should create pipeline");
+        pipeline
+            .run_with_progress(|_, _, _| {})
+            .expect("should run pipeline");
+
+        let result = open_file(output_dir.join("a.dcm")).expect("should open output");
+        let patient_id = result
+            .element(dicom_dictionary_std::tags::PATIENT_ID)
+            .expect("present")
+            .value()
+            .to_str()
+            .expect("readable")
+            .trim()
+            .to_string();
+        assert_ne!(patient_id, "MRN001", "the recipe hashed it");
+        assert_ne!(patient_id, "ANON-1", "no mapper was supplied");
+    }
+
+    /// Requirement r-7-2: the mapper wins even when the recipe removes
+    /// PatientID outright — the override is on the tag, not on a value
+    /// the recipe happened to leave behind.
+    #[test]
+    fn r7_2_mapper_overrides_a_recipe_that_removes_patient_id() {
+        use crate::mapper::PatientIdMapper;
+
+        let tmp = TempDir::new().expect("should create temp dir");
+        let input_dir = tmp.path().join("input");
+        let output_dir = tmp.path().join("output");
+        write_mapper_input(&input_dir, "a", "MRN001");
+
+        let recipe = "FORMAT dicom\n%header\nREMOVE PatientID\n";
+        let mapper =
+            PatientIdMapper::from_pairs([("MRN001", "ANON-1")]).expect("should build mapper");
+        let pipeline = DeidPipeline::from_recipe_text_with_mapper(
+            recipe,
+            mapper_config(input_dir, output_dir.clone()),
+            mapper,
+        )
+        .expect("should create pipeline");
+        pipeline
+            .run_with_progress(|_, _, _| {})
+            .expect("should run pipeline");
+
+        let result = open_file(output_dir.join("a.dcm")).expect("should open output");
+        assert_eq!(
+            result
+                .element(dicom_dictionary_std::tags::PATIENT_ID)
+                .expect("the mapper puts PatientID back")
+                .value()
+                .to_str()
+                .expect("readable")
+                .trim(),
+            "ANON-1"
         );
     }
 
@@ -1908,9 +2057,12 @@ REPLACE SOPInstanceUID func:hashuid
 
         let mapper =
             PatientIdMapper::from_pairs([("MRN001", "ANON-1")]).expect("should build mapper");
-        let pipeline =
-            DeidPipeline::from_mapper(mapper, mapper_config(input_dir, output_dir.clone()))
-                .expect("should create pipeline");
+        let pipeline = DeidPipeline::from_recipe_text_with_mapper(
+            MAPPER_RECIPE,
+            mapper_config(input_dir, output_dir.clone()),
+            mapper,
+        )
+        .expect("should create pipeline");
         let report = pipeline
             .run_with_progress(|_, _, _| {})
             .expect("run should not abort");
@@ -1975,9 +2127,12 @@ REPLACE SOPInstanceUID func:hashuid
 
         let mapper =
             PatientIdMapper::from_pairs([("MRN001", "ANON-1")]).expect("should build mapper");
-        let pipeline =
-            DeidPipeline::from_mapper(mapper, mapper_config(input_dir, output_dir.clone()))
-                .expect("should create pipeline");
+        let pipeline = DeidPipeline::from_recipe_text_with_mapper(
+            "FORMAT dicom\n%header\nREPLACE PatientName ANON\n",
+            mapper_config(input_dir, output_dir.clone()),
+            mapper,
+        )
+        .expect("should create pipeline");
         let report = pipeline
             .run_with_progress(|_, _, _| {})
             .expect("should run pipeline");
@@ -1988,7 +2143,7 @@ REPLACE SOPInstanceUID func:hashuid
         assert_eq!(
             result.meta().transfer_syntax(),
             IMPLICIT_VR_LE,
-            "mapper mode decompresses nothing, so the transfer syntax must be preserved"
+            "nothing decompressed this file, so the transfer syntax must be preserved"
         );
         let value = |tag| {
             result
@@ -2001,7 +2156,7 @@ REPLACE SOPInstanceUID func:hashuid
                 .to_string()
         };
         assert_eq!(value(dicom_dictionary_std::tags::PATIENT_ID), "ANON-1");
-        assert_eq!(value(dicom_dictionary_std::tags::PATIENT_NAME), "Doe^Jane");
+        assert_eq!(value(dicom_dictionary_std::tags::PATIENT_NAME), "ANON");
     }
 
     /// Requirement r-7-1: the mapper file is read and validated when the
@@ -2015,11 +2170,12 @@ REPLACE SOPInstanceUID func:hashuid
 
         let mapper_path = tmp.path().join("ids.csv");
         fs::write(&mapper_path, "PatientID,DeidPatientID\nMRN001,ANON-1\n").expect("write mapper");
-        let pipeline = DeidPipeline::from_mapper_file(
-            &mapper_path,
-            mapper_config(input_dir.clone(), output_dir.clone()),
-        )
-        .expect("should load the mapper");
+        let mut config = mapper_config(input_dir.clone(), output_dir.clone());
+        config.recipe_path = tmp.path().join("recipe.txt");
+        fs::write(&config.recipe_path, MAPPER_RECIPE).expect("write recipe");
+        let recipe_path = config.recipe_path.clone();
+        let pipeline =
+            DeidPipeline::with_mapper_file(config, &mapper_path).expect("should load the mapper");
         assert_eq!(
             pipeline
                 .run_with_progress(|_, _, _| {})
@@ -2031,7 +2187,9 @@ REPLACE SOPInstanceUID func:hashuid
         // A mapper with conflicting duplicates fails before the run.
         let bad_path = tmp.path().join("bad.csv");
         fs::write(&bad_path, "MRN001,ANON-1\nMRN001,ANON-2\n").expect("write mapper");
-        let err = DeidPipeline::from_mapper_file(&bad_path, mapper_config(input_dir, output_dir))
+        let mut config = mapper_config(input_dir, output_dir);
+        config.recipe_path = recipe_path;
+        let err = DeidPipeline::with_mapper_file(config, &bad_path)
             .err()
             .expect("should reject the mapper");
         assert!(
