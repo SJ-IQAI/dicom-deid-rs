@@ -35,6 +35,7 @@ project.
 - **Recipe-driven** -- all operations defined in a human-readable recipe file compatible with CTP conventions
 - **Compressed pixel data** -- decompresses JPEG Baseline, JPEG Lossless, JPEG 2000, and RLE Lossless before masking
 - **Blacklist filtering** -- exclude files from output entirely based on tag conditions
+- **PatientID mapper** -- swap in pre-assigned study identifiers from a CSV or JSON file, changing nothing else
 - **Embeddable** -- designed as a library with a CLI frontend; custom functions and variables can be injected at runtime
 
 ## Usage
@@ -59,6 +60,58 @@ as `REPLACE PatientID func:hashuid` cannot be reversed by hashing candidate
 inputs without the salt. Use the same salt across runs of a dataset to keep
 hashed UIDs and IDs consistent; without `--salt`, output is plain (unsalted)
 SHA-256, equivalent to an empty salt.
+
+### PatientID mapper
+
+When a site has already assigned study identifiers out of band, `--mapper`
+substitutes them and leaves everything else alone:
+
+```
+dicom-deid-rs ./input ./output --mapper ./keys/ids.csv
+```
+
+This is a distinct mode, not an extra recipe action. The **only** change made
+to the data set is PatientID (0010,0020); no recipe actions, filters, pixel
+masking, or private tag removal run, so the recipe argument becomes optional
+and is ignored if supplied. File Meta Information de-identification still
+applies, since it is unconditional for every written file.
+
+A file whose PatientID is missing, empty, or absent from the mapper is
+reported and counted as skipped — never written. The substitution is the only
+protection applied in this mode, so passing such a file through would emit the
+original identifier.
+
+CSV takes the original PatientID in the first column and the replacement in
+the second. A header row naming the columns is recognized and skipped, and
+when present the columns are located by name, so either column order works.
+Names are matched ignoring case, spacing, and punctuation (`PatientID`,
+`patient_id`, and `Patient ID` are one name); extra columns are ignored.
+
+```csv
+PatientID,DeidPatientID
+MRN0012345,ANON-0001
+MRN0067890,ANON-0002
+```
+
+JSON accepts an object of pairs, an array of `[original, replacement]` pairs,
+or an array of objects keyed by those same column names:
+
+```json
+{ "MRN0012345": "ANON-0001", "MRN0067890": "ANON-0002" }
+```
+
+The file is read and validated before any DICOM file is processed, so a bad
+mapper fails immediately rather than part way through a run. An empty
+replacement, one longer than the 64 bytes VR LO allows, or one containing a
+backslash or control character is rejected, as are two different replacements
+for the same original — silently picking one would make the output depend on
+row order. A repeated identical pair is fine, since mapper files are often
+concatenated.
+
+Lookup matches the value exactly once DICOM padding is trimmed. Nothing else
+is normalized, so identifiers differing only in case are different patients.
+PatientID nested inside sequences is mapped too, each occurrence by its own
+value.
 
 ### De-identified output paths
 
@@ -289,6 +342,23 @@ println!("Processed: {}, Blacklisted: {}", report.files_processed, report.files_
 ```
 
 Custom functions can be supplied via `config.functions` to extend the recipe with application-specific logic.
+
+Mapper mode has its own constructors, since it replaces the recipe rather than
+supplementing it. `recipe_path` is not read. The mapper can come from a file or
+from pairs already in memory, with the same validation either way:
+
+```rust
+use dicom_deid_rs::mapper::PatientIdMapper;
+use dicom_deid_rs::pipeline::DeidPipeline;
+use std::path::Path;
+
+// From a .csv or .json file...
+let pipeline = DeidPipeline::from_mapper_file(Path::new("./keys/ids.csv"), config).unwrap();
+
+// ...or from pairs the caller already holds.
+let mapper = PatientIdMapper::from_pairs([("MRN0012345", "ANON-0001")]).unwrap();
+let pipeline = DeidPipeline::from_mapper(mapper, config).unwrap();
+```
 
 ## Building
 

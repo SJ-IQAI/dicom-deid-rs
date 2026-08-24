@@ -2,7 +2,9 @@ pub mod error;
 pub mod filter;
 pub mod filter_index;
 pub mod functions;
+mod json;
 pub mod layout;
+pub mod mapper;
 pub mod metadata;
 #[cfg(feature = "pipeline")]
 pub mod pipeline;

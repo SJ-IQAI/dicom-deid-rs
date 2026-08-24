@@ -37,6 +37,19 @@ pub enum DeidError {
     #[error("Output path collision: {0}")]
     PathCollision(String),
 
+    /// A PatientID mapper file could not be read, parsed, or validated
+    /// (r-7-1). Raised while the pipeline is being constructed, so no
+    /// file has been processed yet.
+    #[error("Mapper file error: {0}")]
+    Mapper(String),
+
+    /// A data set's PatientID could not be mapped (r-7-6): it is
+    /// absent, empty, or has no entry in the mapper file. Non-fatal:
+    /// the file is counted as skipped, so it is never written carrying
+    /// an unmapped identifier.
+    #[error("PatientID mapping error: {0}")]
+    MapperLookup(String),
+
     /// The File Meta Information group cannot be brought into a
     /// de-identified, self-consistent state.
     ///
